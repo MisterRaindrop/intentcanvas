@@ -1,0 +1,19 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  apps/runtime:
+    dependencies:
+      '@intentcanvas/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
+  apps/studio: {}
+
+  packages/protocol: {}

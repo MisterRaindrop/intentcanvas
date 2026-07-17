@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "intentcanvas",
+  "displayName": "IntentCanvas",
+  "version": "0.1.0",
+  "description": "Visual-first planning, approval, and plan-versus-actual review for AI-assisted code changes.",
+  "author": {
+    "name": "liuxiaoyu",
+    "url": "https://github.com/MisterRaindrop"
+  },
+  "homepage": "https://github.com/MisterRaindrop/intentcanvas#readme",
+  "repository": "https://github.com/MisterRaindrop/intentcanvas",
+  "keywords": [
+    "code-planning",
+    "architecture",
+    "uml",
+    "code-review",
+    "ai-development"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

@@ -1,0 +1,36 @@
+{
+  "name": "intentcanvas",
+  "version": "0.1.0",
+  "description": "Visual-first planning, approval, and plan-versus-actual review for AI-assisted code changes.",
+  "author": {
+    "name": "liuxiaoyu",
+    "url": "https://github.com/MisterRaindrop"
+  },
+  "homepage": "https://github.com/MisterRaindrop/intentcanvas#readme",
+  "repository": "https://github.com/MisterRaindrop/intentcanvas",
+  "keywords": [
+    "code-planning",
+    "architecture",
+    "uml",
+    "code-review",
+    "ai-development"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "IntentCanvas",
+    "shortDescription": "Review visual code plans before implementation",
+    "longDescription": "Turn proposed code changes into a structured, visual plan; approve modules before implementation; then compare the approved plan with the resulting code.",
+    "developerName": "liuxiaoyu",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/MisterRaindrop/intentcanvas",
+    "defaultPrompt": [
+      "Create a visual plan for this change and wait for my approval.",
+      "Compare the approved plan with the implemented code."
+    ],
+    "brandColor": "#14B8A6"
+  }
+}

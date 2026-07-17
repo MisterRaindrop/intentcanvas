@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="IntentCanvas 图形化开发计划评审">
+    <title>IntentCanvas · 图形化计划评审</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="app-header">
+      <a class="brand" href="#overview" aria-label="IntentCanvas 总体设计">
+        <span class="brand-mark" aria-hidden="true">IC</span>
+        <span>
+          <strong>IntentCanvas</strong>
+          <small>先看图，再批准开发</small>
+        </span>
+      </a>
+      <div class="header-context" aria-live="polite">
+        <span id="connection-status" class="connection-status is-loading">正在载入计划</span>
+        <span id="review-id" class="review-id">doris-tde-demo</span>
+      </div>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <section id="loading-view" class="state-view" aria-live="polite">
+        <div class="loader" aria-hidden="true"></div>
+        <h1>正在整理图形化计划</h1>
+        <p>读取模块关系、关键入口和具体修改点……</p>
+      </section>
+
+      <section id="error-view" class="state-view" hidden>
+        <span class="state-icon" aria-hidden="true">!</span>
+        <h1>暂时没有读到计划</h1>
+        <p id="error-message">请确认 IntentCanvas Runtime 已启动。</p>
+        <button id="retry-button" class="button button-primary" type="button">重新读取</button>
+      </section>
+
+      <section id="overview-view" class="page" hidden aria-labelledby="overview-title">
+        <nav class="breadcrumb" aria-label="当前位置">
+          <span>总体设计</span>
+        </nav>
+
+        <div class="hero">
+          <div>
+            <p class="eyebrow">图形化开发计划</p>
+            <h1 id="overview-title">Doris TDE 透明加密</h1>
+            <p id="review-summary" class="hero-summary"></p>
+          </div>
+          <div class="hero-actions">
+            <div id="review-progress" class="progress-copy" aria-live="polite"></div>
+            <button id="start-review-button" class="button button-primary" type="button">开始逐模块审核</button>
+          </div>
+        </div>
+
+        <section class="overview-section" aria-labelledby="architecture-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">01 · 全局关系</p>
+              <h2 id="architecture-title">总体模块图</h2>
+              <p>只展示这次开发涉及的模块。点击任一模块，查看它具体打算怎么改。</p>
+            </div>
+            <div class="change-legend" aria-label="变更颜色说明">
+              <span><i class="legend-dot is-added"></i>新增</span>
+              <span><i class="legend-dot is-modified"></i>修改</span>
+              <span><i class="legend-dot is-removed"></i>删除</span>
+              <span><i class="legend-dot is-unchanged"></i>不变</span>
+            </div>
+          </div>
+
+          <div id="architecture-graph" class="architecture-graph" role="group" aria-label="TDE 总体模块关系图">
+            <svg id="architecture-lines" class="architecture-lines" aria-hidden="true"></svg>
+            <div id="architecture-nodes" class="architecture-nodes"></div>
+          </div>
+          <ol id="mobile-relationships" class="mobile-relationships" aria-label="模块依赖关系"></ol>
+        </section>
+
+        <section class="overview-section summaries-section" aria-labelledby="summaries-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">02 · 通俗说明</p>
+              <h2 id="summaries-title">每个模块准备怎么改</h2>
+              <p>一行只讲清一件事；需要确认细节时再进入模块。</p>
+            </div>
+          </div>
+          <ol id="module-summaries" class="module-summaries"></ol>
+        </section>
+      </section>
+
+      <section id="module-view" class="page" hidden aria-labelledby="module-title">
+        <nav class="breadcrumb" aria-label="当前位置">
+          <button id="breadcrumb-overview" class="text-button" type="button">总体设计</button>
+          <span aria-hidden="true">/</span>
+          <span id="breadcrumb-module"></span>
+        </nav>
+
+        <div class="module-header">
+          <div>
+            <p id="module-position" class="eyebrow"></p>
+            <h1 id="module-title"></h1>
+            <p id="module-summary" class="hero-summary"></p>
+          </div>
+          <div id="module-decision" class="decision-status is-pending" aria-live="polite">待审核</div>
+        </div>
+
+        <section class="detail-section" aria-labelledby="call-flow-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">先看图 · 再看实现</p>
+              <h2 id="call-flow-title">简化调用路径</h2>
+              <p>保留顶层入口和关键交接点，普通转发函数默认折叠。</p>
+            </div>
+          </div>
+
+          <div class="flow-viewport">
+            <div id="module-flow" class="module-flow" role="group" aria-label="当前模块的简化调用路径"></div>
+          </div>
+          <div id="flow-expanded" class="flow-expanded" hidden></div>
+        </section>
+
+        <section class="detail-section" aria-labelledby="changes-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">具体落点</p>
+              <h2 id="changes-title">类、函数和成员修改</h2>
+              <p>这里回答“具体在哪里加、删或改”。</p>
+            </div>
+          </div>
+          <div id="change-groups" class="change-groups"></div>
+        </section>
+
+        <section class="detail-section" aria-labelledby="pseudocode-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">实现约束</p>
+              <h2 id="pseudocode-title">关键伪代码</h2>
+              <p>明确主干逻辑和错误处理边界，防止实现过程中跑偏。</p>
+            </div>
+          </div>
+          <div id="pseudocode-grid" class="pseudocode-grid"></div>
+        </section>
+
+        <section class="review-panel" aria-labelledby="decision-title">
+          <div>
+            <p class="section-kicker">模块审核</p>
+            <h2 id="decision-title">这个模块可以这样改吗？</h2>
+            <p>批准后 AI 可以按计划继续；如果需要调整，请写清修改意见。</p>
+          </div>
+          <label class="comment-field" for="decision-comment">
+            <span>审核意见（要求调整时必填）</span>
+            <textarea id="decision-comment" rows="3" placeholder="例如：密钥不能由 RowsetWriter 直接获取，应统一经过 KeyManager。"></textarea>
+          </label>
+          <p id="decision-message" class="decision-message" aria-live="polite"></p>
+          <div class="decision-actions">
+            <button id="request-changes-button" class="button button-secondary" type="button">要求调整</button>
+            <button id="approve-button" class="button button-primary" type="button">批准这个模块</button>
+          </div>
+        </section>
+
+        <nav class="module-navigation" aria-label="模块切换">
+          <button id="previous-module" class="button button-ghost" type="button">← 上一个模块</button>
+          <button id="back-overview" class="button button-ghost" type="button">返回总体设计</button>
+          <button id="next-module" class="button button-primary" type="button">下一个模块 →</button>
+        </nav>
+      </section>
+    </main>
+
+    <template id="module-node-template">
+      <button class="module-node" type="button">
+        <span class="module-node-status"></span>
+        <strong class="module-node-name"></strong>
+        <span class="module-node-summary"></span>
+        <span class="module-node-open">查看修改 <span aria-hidden="true">→</span></span>
+      </button>
+    </template>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
