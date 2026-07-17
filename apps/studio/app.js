@@ -8,8 +8,27 @@ import {
   "use strict";
 
   const REVIEW_ID = reviewIdFromSearch(window.location.search);
+  const HANDOFF_PARAM = "handoff";
+  const SESSION_STORAGE_KEY = `intentcanvas-session:${REVIEW_ID}`;
+
+  function handoffFromSearch() {
+    const parameters = new URLSearchParams(window.location.search);
+    const supplied = parameters.get(HANDOFF_PARAM);
+    return supplied && /^[A-Za-z0-9_-]{43}$/u.test(supplied) ? supplied : null;
+  }
+
+  function sessionFromStorage() {
+    try {
+      const session = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+      return session && /^[A-Za-z0-9_-]{43}$/u.test(session) ? session : null;
+    } catch {
+      return null;
+    }
+  }
+
   const REVIEW_ENDPOINT = `/api/reviews/${encodeURIComponent(REVIEW_ID)}`;
   const DECISIONS_ENDPOINT = `${REVIEW_ENDPOINT}/decisions`;
+  const REVISIONS_ENDPOINT = `${REVIEW_ENDPOINT}/revisions`;
 
   const CHANGE_LABELS = {
     added: "新增",
@@ -30,7 +49,12 @@ import {
     flowExpanded: false,
     pseudocodeChangeId: null,
     graphPositions: new Map(),
-    savingDecision: false
+    savingDecision: false,
+    revision: null,
+    revisionsLoaded: false,
+    staleReview: false,
+    handoff: handoffFromSearch(),
+    sessionToken: sessionFromStorage()
   };
 
   const elements = {};
@@ -43,8 +67,11 @@ import {
     [
       "loading-view", "error-view", "overview-view", "module-view", "error-message",
       "retry-button", "connection-status", "review-id", "overview-title", "review-summary",
+      "review-revision", "refresh-review-button", "revision-history", "revision-list",
+      "revision-message",
       "review-progress", "start-review-button", "architecture-graph", "architecture-lines",
       "architecture-nodes", "mobile-relationships", "module-summaries", "breadcrumb-overview",
+      "risks-list", "verification-list",
       "breadcrumb-module", "module-position", "module-title", "module-summary", "module-decision",
       "module-flow", "flow-expanded", "change-groups", "pseudocode-grid", "decision-comment",
       "decision-message", "request-changes-button", "approve-button", "previous-module",
@@ -59,17 +86,88 @@ import {
     return fallback;
   }
 
+  function removeHandoffFromAddress() {
+    const parameters = new URLSearchParams(window.location.search);
+    parameters.delete(HANDOFF_PARAM);
+    const query = parameters.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`
+    );
+  }
+
+  function rememberSession(session) {
+    state.sessionToken = session;
+    try {
+      window.sessionStorage.setItem(SESSION_STORAGE_KEY, session);
+    } catch {
+      // The current page can still use the in-memory review-scoped session.
+    }
+  }
+
+  function forgetSession() {
+    state.sessionToken = null;
+    try {
+      window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // Nothing else is required when storage is unavailable.
+    }
+  }
+
+  function reviewHeaders({ json = false } = {}) {
+    const headers = { Accept: "application/json" };
+    if (state.sessionToken) headers.Authorization = `Bearer ${state.sessionToken}`;
+    if (json) headers["Content-Type"] = "application/json";
+    return headers;
+  }
+
+  async function exchangeBrowserHandoff() {
+    if (!state.handoff) return;
+    const response = await fetch("/api/session", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ handoff: state.handoff })
+    });
+    if (!response.ok) {
+      throw new Error(response.status === 401
+        ? "打开链接已经过期或使用过，请回到终端重新生成计划链接"
+        : `无法建立浏览器会话（服务返回 ${response.status}）`);
+    }
+    const payload = await response.json();
+    if (!payload || payload.ok !== true || payload.reviewId !== REVIEW_ID ||
+        typeof payload.session !== "string" ||
+        !/^[A-Za-z0-9_-]{43}$/u.test(payload.session)) {
+      throw new Error("打开链接与当前计划不匹配，请回到终端重新生成");
+    }
+    rememberSession(payload.session);
+    state.handoff = null;
+    removeHandoffFromAddress();
+  }
+
   async function fetchReview() {
     showView("loading");
     setConnection("正在载入计划", "loading");
     try {
+      await exchangeBrowserHandoff();
       const response = await fetch(REVIEW_ENDPOINT, {
-        headers: { Accept: "application/json" }
+        headers: reviewHeaders()
       });
+      if (response.status === 401) {
+        forgetSession();
+        throw new Error("浏览器会话已失效，请从终端重新点击最新的计划链接");
+      }
       if (!response.ok) throw new Error(`服务返回 ${response.status}`);
       const payload = await response.json();
       state.review = normalizeReview(payload.review || payload);
+      const revision = Number(response.headers.get("X-IntentCanvas-Revision"));
+      state.revision = Number.isInteger(revision) && revision > 0 ? revision : null;
+      state.revisionsLoaded = false;
+      state.staleReview = state.revision === null;
       elements["review-id"].textContent = state.review.id;
+      elements["review-revision"].textContent = state.revision === null
+        ? "版本 --"
+        : `版本 ${state.revision}`;
       setConnection("计划已连接", "ready");
       renderOverview();
       routeFromHash();
@@ -150,6 +248,59 @@ import {
     renderProgress();
     renderArchitecture();
     renderModuleSummaries();
+    renderRisks();
+    renderVerification();
+  }
+
+  async function fetchRevisions() {
+    if (state.revisionsLoaded) return;
+    elements["revision-message"].textContent = "正在读取版本历史……";
+    try {
+      const response = await fetch(REVISIONS_ENDPOINT, {
+        headers: reviewHeaders()
+      });
+      if (!response.ok) throw new Error(`服务返回 ${response.status}`);
+      const payload = await response.json();
+      if (!payload || payload.reviewId !== state.review.id ||
+          !Number.isInteger(payload.currentRevision) || !Array.isArray(payload.revisions)) {
+        throw new Error("版本历史格式不正确");
+      }
+      state.revision = payload.currentRevision;
+      elements["review-revision"].textContent = `版本 ${state.revision}`;
+      renderRevisionHistory(payload.revisions);
+      state.revisionsLoaded = true;
+    } catch (error) {
+      elements["revision-message"].textContent = `版本历史读取失败：${error instanceof Error ? error.message : "请稍后重试"}`;
+    }
+  }
+
+  function renderRevisionHistory(revisions) {
+    const list = elements["revision-list"];
+    list.replaceChildren();
+    const operationLabels = {
+      created: "创建计划",
+      replaced: "替换整份计划",
+      module_replaced: "调整单个模块"
+    };
+    [...revisions].reverse().forEach((revision) => {
+      if (!Number.isInteger(revision.revision) || revision.revision < 1 ||
+          typeof revision.operation !== "string" || typeof revision.createdAt !== "string") {
+        throw new Error("版本记录格式不正确");
+      }
+      const item = document.createElement("li");
+      item.className = "revision-item";
+      const label = document.createElement("strong");
+      label.textContent = `版本 ${revision.revision} · ${operationLabels[revision.operation] || revision.operation}`;
+      const time = document.createElement("time");
+      time.dateTime = revision.createdAt;
+      time.textContent = new Date(revision.createdAt).toLocaleString();
+      item.append(label, time);
+      if (revision.moduleId) appendModuleLinks(item, [revision.moduleId]);
+      list.appendChild(item);
+    });
+    elements["revision-message"].textContent = revisions.length === 0
+      ? "当前还没有版本记录。"
+      : `共 ${revisions.length} 个结构版本；模块审批不会创建新的结构版本。`;
   }
 
   function renderProgress() {
@@ -361,6 +512,75 @@ import {
     });
   }
 
+  function appendModuleLinks(container, moduleIds) {
+    const links = document.createElement("div");
+    links.className = "evidence-modules";
+    moduleIds.forEach((moduleId) => {
+      const module = moduleById(moduleId);
+      if (!module) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "evidence-module-link";
+      button.textContent = module.name;
+      button.addEventListener("click", () => openModule(module.id));
+      links.appendChild(button);
+    });
+    if (links.childElementCount > 0) container.appendChild(links);
+  }
+
+  function renderRisks() {
+    const list = elements["risks-list"];
+    list.replaceChildren();
+    if (state.review.risks.length === 0) {
+      const empty = document.createElement("li");
+      empty.className = "evidence-empty";
+      empty.textContent = "当前计划没有登记核心风险。";
+      list.appendChild(empty);
+      return;
+    }
+
+    state.review.risks.forEach((risk) => {
+      const item = document.createElement("li");
+      item.className = `evidence-item risk-item is-${risk.level}`;
+      const heading = document.createElement("div");
+      heading.className = "evidence-item-heading";
+      const title = document.createElement("strong");
+      title.textContent = risk.title;
+      const level = document.createElement("span");
+      level.className = "risk-level";
+      level.textContent = risk.level.toUpperCase();
+      heading.append(title, level);
+      const mitigation = document.createElement("p");
+      mitigation.textContent = risk.mitigation;
+      item.append(heading, mitigation);
+      appendModuleLinks(item, risk.moduleIds);
+      list.appendChild(item);
+    });
+  }
+
+  function renderVerification() {
+    const list = elements["verification-list"];
+    list.replaceChildren();
+    state.review.verification.forEach((check) => {
+      const item = document.createElement("li");
+      item.className = "evidence-item verification-item";
+      const heading = document.createElement("div");
+      heading.className = "evidence-item-heading";
+      const type = document.createElement("span");
+      type.className = "verification-type";
+      type.textContent = check.type;
+      const expected = document.createElement("strong");
+      expected.textContent = check.expected;
+      heading.append(type, expected);
+      const command = document.createElement("code");
+      command.className = "verification-command";
+      command.textContent = check.command;
+      item.append(heading, command);
+      appendModuleLinks(item, check.moduleIds);
+      list.appendChild(item);
+    });
+  }
+
   function renderModule(module) {
     const modules = state.review.modules;
     const index = modules.findIndex((item) => item.id === module.id);
@@ -370,6 +590,7 @@ import {
     elements["module-summary"].textContent = module.summary;
     elements["decision-comment"].value = module.approval.comment;
     elements["decision-message"].textContent = "";
+    setDecisionControlsDisabled(state.staleReview || state.savingDecision);
     updateDecisionStatus(module);
     renderModuleFlow(module);
     renderChangeGroups(module);
@@ -390,7 +611,7 @@ import {
         id: String(step.id || `step-${index}`),
         label: text(step.label || step.signature, `步骤 ${index + 1}`),
         description: text(step.description),
-        status: normalizeStatus(step.status || changeWithPath.status),
+        status: step.status,
         collapsedCount: Math.max(0, Number(step.collapsedCount) || 0),
         collapsedSteps: Array.isArray(step.collapsedSteps) ? step.collapsedSteps : []
       }));
@@ -402,7 +623,7 @@ import {
         id: String(node.id || `node-${index}`),
         label: text(node.label, `节点 ${index + 1}`),
         description: text(node.description || node.type),
-        status: normalizeStatus(node.status || module.status),
+        status: node.status,
         collapsedCount: Math.max(0, Number(node.collapsedCount) || 0),
         collapsedSteps: Array.isArray(node.collapsedSteps) ? node.collapsedSteps : []
       }));
@@ -632,6 +853,11 @@ import {
     if (state.savingDecision) return;
     const module = moduleById(state.selectedModuleId);
     if (!module) return;
+    if (!Number.isInteger(state.revision) || state.revision < 1 || state.staleReview) {
+      elements["decision-message"].textContent = "计划版本已变化，请先点右上角“刷新”并重新查看这个模块。";
+      setDecisionControlsDisabled(true);
+      return;
+    }
     const comment = elements["decision-comment"].value.trim();
     if (decision === "changes_requested" && !comment) {
       elements["decision-message"].textContent = "请先写明需要调整的地方，AI 才知道如何重新规划。";
@@ -645,12 +871,19 @@ import {
     try {
       const response = await fetch(DECISIONS_ENDPOINT, {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ moduleId: module.id, decision, comment })
+        headers: reviewHeaders({ json: true }),
+        body: JSON.stringify({
+          moduleId: module.id,
+          decision,
+          comment,
+          expectedRevision: state.revision
+        })
       });
+      if (response.status === 409) {
+        state.staleReview = true;
+        state.revisionsLoaded = false;
+        throw new Error("计划已经更新，请刷新后重新审核当前模块");
+      }
       if (!response.ok) throw new Error(`服务返回 ${response.status}`);
       const result = normalizeDecisionResponse(await response.json(), {
         expectedReviewId: state.review.id,
@@ -658,6 +891,7 @@ import {
       });
       module.approval = result.approval;
       state.review.status = result.reviewStatus;
+      state.revision = result.revision;
       updateDecisionStatus(module);
       renderProgress();
       elements["decision-message"].textContent = result.approval.decision === "approved"
@@ -667,7 +901,7 @@ import {
       elements["decision-message"].textContent = `保存失败：${error instanceof Error ? error.message : "请稍后重试"}`;
     } finally {
       state.savingDecision = false;
-      setDecisionControlsDisabled(false);
+      setDecisionControlsDisabled(state.staleReview || state.savingDecision);
     }
   }
 
@@ -679,6 +913,10 @@ import {
 
   function bindEvents() {
     elements["retry-button"].addEventListener("click", fetchReview);
+    elements["refresh-review-button"].addEventListener("click", fetchReview);
+    elements["revision-history"].addEventListener("toggle", (event) => {
+      if (event.currentTarget.open) fetchRevisions();
+    });
     elements["start-review-button"].addEventListener("click", () => {
       const next = state.review.modules.find((module) => module.approval.decision === "pending")
         || state.review.modules[0];

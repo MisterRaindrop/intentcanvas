@@ -1,0 +1,26 @@
+{
+  "name": "@intentcanvas/cli",
+  "version": "0.2.0",
+  "description": "Import, validate, revise, and open IntentCanvas visual plans from the terminal.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "intentcanvas": "./src/index.js"
+  },
+  "exports": {
+    ".": "./src/cli.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@intentcanvas/local-auth": "workspace:*",
+    "@intentcanvas/protocol": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

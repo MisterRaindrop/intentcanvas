@@ -1,6 +1,6 @@
 {
   "name": "intentcanvas",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Visual-first planning, review, execution, and verification for AI-assisted code changes.",
   "license": "Apache-2.0",
@@ -12,7 +12,13 @@
   "scripts": {
     "dev": "pnpm --filter @intentcanvas/runtime dev",
     "start": "pnpm --filter @intentcanvas/runtime start",
-    "test": "pnpm -r test",
+    "intentcanvas": "node apps/cli/src/index.js",
+    "facts": "node packages/code-facts/bin/code-facts.js",
+    "diff": "node packages/plan-diff/src/bin.js",
+    "facts-diff": "node packages/plan-diff/src/facts-bin.js",
+    "bridge": "node packages/bridge/bin/intentcanvas-bridge.js",
+    "test": "pnpm -r test && pnpm test:workflow",
+    "test:workflow": "node --test tests/*.test.js scripts/*.test.mjs",
     "check:boundaries": "node tooling/check-boundaries.mjs",
     "check": "pnpm check:boundaries && pnpm test"
   }

@@ -21,3 +21,13 @@ export {
   validateAgentEvent,
   validateAgentEventAck
 } from "./agent-event.js";
+
+export {
+  CODE_FACTS_CONFIDENCE_LEVELS,
+  CODE_FACTS_DIAGNOSTIC_SEVERITIES,
+  CODE_FACTS_KIND,
+  CODE_FACTS_SCHEMA_VERSION,
+  assertCodeFacts,
+  cloneCodeFacts,
+  validateCodeFacts
+} from "./code-facts.js";

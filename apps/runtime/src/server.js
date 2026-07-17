@@ -1,17 +1,31 @@
 import { createServer as createHttpServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  loadOrCreateAuthToken,
+  validateAuthToken
+} from "@intentcanvas/local-auth";
+import {
   PLAN_SCHEMA_VERSION,
   createTdePlanFixture
 } from "@intentcanvas/protocol";
+import {
+  acquireRuntimeDataDirectoryLock,
+  JsonFileReviewPersistence,
+  RuntimePersistenceError,
+  SerializedReviewWriter,
+  resolveDataDirectory
+} from "./persistence.js";
+import { RuntimeAuthManager } from "./auth-session.js";
 import { ReviewStore, ReviewStoreError } from "./review-store.js";
+
+export { resolveDataDirectory } from "./persistence.js";
 
 export const RUNTIME_HOST = "127.0.0.1";
 export const RUNTIME_PORT = 4317;
-export const RUNTIME_VERSION = "0.1.0";
+export const RUNTIME_VERSION = "0.2.0";
 
 const MONOREPO_STUDIO_DIRECTORY = fileURLToPath(
   new URL("../../studio/", import.meta.url)
@@ -28,6 +42,7 @@ export function resolveStudioDirectory(
 export const DEFAULT_STUDIO_DIRECTORY = resolveStudioDirectory();
 
 const MAX_JSON_BYTES = 256 * 1024;
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -49,19 +64,23 @@ const CONTENT_TYPES = new Map([
 
 function commonHeaders() {
   return {
+    "Content-Security-Policy": "default-src 'self'; base-uri 'none'; form-action 'self'; " +
+      "frame-ancestors 'self'; object-src 'none'; img-src 'self' data:",
+    "Cross-Origin-Resource-Policy": "same-origin",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN"
   };
 }
 
-function sendJson(response, status, value, { head = false } = {}) {
+function sendJson(response, status, value, { head = false, headers = {} } = {}) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
     ...commonHeaders(),
     "Cache-Control": "no-store",
     "Content-Length": Buffer.byteLength(body),
-    "Content-Type": "application/json; charset=utf-8"
+    "Content-Type": "application/json; charset=utf-8",
+    ...headers
   });
   response.end(head ? undefined : body);
 }
@@ -72,6 +91,28 @@ function sendEmpty(response, status, headers = {}) {
 }
 
 async function readJson(request) {
+  const contentType = String(request.headers["content-type"] ?? "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "application/json" && !contentType.endsWith("+json")) {
+    throw new ReviewStoreError("JSON requests must use application/json", {
+      code: "unsupported_media_type",
+      status: 415
+    });
+  }
+
+  const declaredLength = request.headers["content-length"];
+  if (declaredLength !== undefined) {
+    const parsedLength = Number(declaredLength);
+    if (Number.isFinite(parsedLength) && parsedLength > MAX_JSON_BYTES) {
+      throw new ReviewStoreError(`JSON body exceeds ${MAX_JSON_BYTES} bytes`, {
+        code: "body_too_large",
+        status: 413
+      });
+    }
+  }
+
   const chunks = [];
   let length = 0;
   for await (const chunk of request) {
@@ -102,6 +143,90 @@ async function readJson(request) {
   }
 }
 
+function assertLocalRequest(request) {
+  const authorityValue = request.headers.host;
+  if (typeof authorityValue !== "string" || authorityValue.length === 0) {
+    throw new ReviewStoreError("Request Host is required", {
+      code: "invalid_host",
+      status: 400
+    });
+  }
+
+  let authority;
+  try {
+    authority = new URL(`http://${authorityValue}`);
+  } catch {
+    throw new ReviewStoreError("Request Host is invalid", {
+      code: "invalid_host",
+      status: 400
+    });
+  }
+  if (!LOOPBACK_HOSTS.has(authority.hostname.toLowerCase())) {
+    throw new ReviewStoreError("IntentCanvas Runtime only accepts loopback Host values", {
+      code: "non_loopback_host",
+      status: 403
+    });
+  }
+
+  const originValue = request.headers.origin;
+  if (originValue === undefined) return;
+  let origin;
+  try {
+    origin = new URL(originValue);
+  } catch {
+    throw new ReviewStoreError("Request Origin is invalid", {
+      code: "invalid_origin",
+      status: 403
+    });
+  }
+  if (origin.protocol !== "http:" ||
+      !LOOPBACK_HOSTS.has(origin.hostname.toLowerCase()) ||
+      origin.host.toLowerCase() !== authority.host.toLowerCase()) {
+    throw new ReviewStoreError("Cross-origin requests are not allowed", {
+      code: "cross_origin_request",
+      status: 403
+    });
+  }
+}
+
+function assertApiAuthorization(request, authManager) {
+  if (authManager === false) return { kind: "disabled" };
+  if (!authManager || typeof authManager.authorize !== "function") {
+    throw new ReviewStoreError("Runtime authentication is not configured", {
+      code: "runtime_auth_unavailable",
+      status: 503
+    });
+  }
+  const principal = typeof authManager.authenticate === "function"
+    ? authManager.authenticate(request.headers)
+    : authManager.authorize(request.headers) ? { kind: "bearer" } : null;
+  if (!principal) {
+    throw new ReviewStoreError("A valid local Runtime token is required", {
+      code: "runtime_auth_required",
+      status: 401
+    });
+  }
+  return principal;
+}
+
+function assertBrowserSessionScope(request, segments, principal) {
+  if (principal.kind !== "session") return;
+  const reviewId = segments[0] === "api" && segments[1] === "reviews"
+    ? segments[2]
+    : null;
+  const isReviewRead = request.method === "GET" &&
+    [3, 4, 5].includes(segments.length);
+  const isDecision = request.method === "POST" &&
+    ((segments.length === 4 && segments[3] === "decisions") ||
+      (segments.length === 6 && segments[3] === "modules" && segments[5] === "approval"));
+  if (reviewId !== principal.reviewId || (!isReviewRead && !isDecision)) {
+    throw new ReviewStoreError("Browser session is limited to its review", {
+      code: "browser_session_scope",
+      status: 403
+    });
+  }
+}
+
 function decodeSegments(pathname) {
   try {
     return pathname
@@ -125,25 +250,42 @@ async function findStaticFile(pathname, studioDirectory) {
     return null;
   }
 
-  const relativePath = decodedPath === "/" ? "index.html" : `.${decodedPath}`;
-  let candidate = resolve(root, relativePath);
-  if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) return null;
+  const decodedSegments = decodedPath.split("/").filter(Boolean);
+  if (decodedSegments.some((segment) => segment.startsWith("."))) return null;
 
+  let canonicalRoot;
   try {
-    const candidateStat = await stat(candidate);
-    if (candidateStat.isDirectory()) candidate = resolve(candidate, "index.html");
-    if ((await stat(candidate)).isFile()) return candidate;
+    canonicalRoot = await realpath(root);
   } catch {
-    // Extensionless routes fall through to the Studio shell below.
+    return null;
   }
 
-  if (extname(decodedPath) === "") {
-    const shell = resolve(root, "index.html");
+  async function containedFile(candidatePath) {
+    let candidate = candidatePath;
     try {
-      if ((await stat(shell)).isFile()) return shell;
+      if ((await stat(candidate)).isDirectory()) {
+        candidate = resolve(candidate, "index.html");
+      }
+      const canonicalCandidate = await realpath(candidate);
+      if (canonicalCandidate !== canonicalRoot &&
+          !canonicalCandidate.startsWith(`${canonicalRoot}${sep}`)) {
+        return null;
+      }
+      return (await stat(canonicalCandidate)).isFile() ? canonicalCandidate : null;
     } catch {
       return null;
     }
+  }
+
+  const relativePath = decodedPath === "/" ? "index.html" : `.${decodedPath}`;
+  const candidate = resolve(root, relativePath);
+  if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) return null;
+
+  const matchedFile = await containedFile(candidate);
+  if (matchedFile) return matchedFile;
+
+  if (extname(decodedPath) === "") {
+    return containedFile(resolve(root, "index.html"));
   }
   return null;
 }
@@ -182,6 +324,17 @@ function apiError(response, error) {
     return;
   }
 
+  if (error instanceof RuntimePersistenceError) {
+    sendJson(response, error.status, {
+      error: {
+        code: error.code,
+        message: "IntentCanvas could not persist the Runtime state",
+        details: []
+      }
+    });
+    return;
+  }
+
   sendJson(response, 500, {
     error: {
       code: "internal_error",
@@ -197,16 +350,80 @@ export function createDefaultReviewStore() {
 export function createRequestHandler({
   store = createDefaultReviewStore(),
   studioDirectory = resolveStudioDirectory(),
-  now = () => new Date()
+  now = () => new Date(),
+  authManager = null,
+  persistence = null,
+  writer = new SerializedReviewWriter(store, persistence)
 } = {}) {
   return async function requestHandler(request, response) {
     try {
-      const url = new URL(request.url ?? "/", `http://${RUNTIME_HOST}`);
+      assertLocalRequest(request);
+      const requestTarget = request.url ?? "/";
+      const rawPathname = requestTarget.startsWith("/")
+        ? requestTarget.split(/[?#]/u, 1)[0]
+        : null;
+      const url = new URL(requestTarget, `http://${RUNTIME_HOST}`);
       const segments = decodeSegments(url.pathname);
       const isApi = segments[0] === "api";
 
       if (request.method === "OPTIONS" && isApi) {
-        sendEmpty(response, 204, { Allow: "GET, HEAD, POST, OPTIONS" });
+        sendEmpty(response, 204, { Allow: "GET, HEAD, POST, PUT, PATCH, OPTIONS" });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/session") {
+        if (!authManager || authManager === false) {
+          throw new ReviewStoreError("Browser authentication is not configured", {
+            code: "runtime_auth_unavailable",
+            status: 503
+          });
+        }
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body) ||
+            Object.keys(body).some((key) => key !== "handoff")) {
+          throw new ReviewStoreError("Browser session request is invalid", {
+            code: "invalid_handoff",
+            status: 400
+          });
+        }
+        const session = authManager.exchangeHandoff(body.handoff);
+        sendJson(response, 200, {
+          ok: true,
+          reviewId: session.reviewId,
+          session: session.session,
+          expiresAt: session.expiresAt
+        });
+        return;
+      }
+
+      if (isApi) {
+        const principal = assertApiAuthorization(request, authManager);
+        assertBrowserSessionScope(request, segments, principal);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/handoffs") {
+        const body = await readJson(request);
+        if (!body || typeof body !== "object" || Array.isArray(body) ||
+            Object.keys(body).some((key) => key !== "reviewId") ||
+            typeof body.reviewId !== "string") {
+          throw new ReviewStoreError("A reviewId is required", {
+            code: "invalid_review_id",
+            status: 400
+          });
+        }
+        if (!store.getReview(body.reviewId)) {
+          throw new ReviewStoreError(`Unknown review: ${body.reviewId}`, {
+            code: "review_not_found",
+            status: 404
+          });
+        }
+        if (!authManager || authManager === false) {
+          throw new ReviewStoreError("Browser authentication is not configured", {
+            code: "runtime_auth_unavailable",
+            status: 503
+          });
+        }
+        sendJson(response, 201, authManager.createHandoff(body.reviewId));
         return;
       }
 
@@ -227,6 +444,80 @@ export function createRequestHandler({
         return;
       }
 
+      if (request.method === "POST" && segments.length === 2 &&
+          segments[0] === "api" && segments[1] === "reviews") {
+        const plan = await readJson(request);
+        const result = await writer.mutate(
+          (candidate) => candidate.importReview(plan, { now })
+        );
+        sendJson(response, 201, result, {
+          headers: {
+            Location: `/api/reviews/${encodeURIComponent(result.review.id)}`,
+            "X-IntentCanvas-Revision": String(result.revision)
+          }
+        });
+        return;
+      }
+
+      if (request.method === "PUT" && segments.length === 3 &&
+          segments[0] === "api" && segments[1] === "reviews") {
+        const plan = await readJson(request);
+        const result = await writer.mutate(
+          (candidate) => candidate.replaceReview(segments[2], plan, { now })
+        );
+        sendJson(response, 200, result, {
+          headers: { "X-IntentCanvas-Revision": String(result.revision) }
+        });
+        return;
+      }
+
+      if (request.method === "PATCH" && segments.length === 5 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          segments[3] === "modules") {
+        const module = await readJson(request);
+        const result = await writer.mutate(
+          (candidate) => candidate.replaceModule(
+            segments[2],
+            segments[4],
+            module,
+            { now }
+          )
+        );
+        sendJson(response, 200, result, {
+          headers: { "X-IntentCanvas-Revision": String(result.revision) }
+        });
+        return;
+      }
+
+      if (request.method === "GET" && segments.length === 4 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          ["revisions", "history"].includes(segments[3])) {
+        const revisions = store.listRevisions(segments[2]);
+        sendJson(response, 200, {
+          reviewId: segments[2],
+          currentRevision: revisions.at(-1)?.revision ?? null,
+          revisions
+        });
+        return;
+      }
+
+      if (request.method === "GET" && segments.length === 5 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          ["revisions", "history"].includes(segments[3])) {
+        const revisionNumber = Number(segments[4]);
+        const revision = store.getRevision(segments[2], revisionNumber);
+        if (!revision) {
+          throw new ReviewStoreError(
+            `Unknown revision ${segments[4]} for review: ${segments[2]}`,
+            { code: "revision_not_found", status: 404 }
+          );
+        }
+        sendJson(response, 200, revision, {
+          headers: { "X-IntentCanvas-Revision": String(revision.revision) }
+        });
+        return;
+      }
+
       if (request.method === "GET" && segments.length === 3 &&
           segments[0] === "api" && segments[1] === "reviews") {
         const review = store.getReview(segments[2]);
@@ -236,7 +527,10 @@ export function createRequestHandler({
             status: 404
           });
         }
-        sendJson(response, 200, review);
+        const revision = store.getCurrentRevision(segments[2]);
+        sendJson(response, 200, review, {
+          headers: { "X-IntentCanvas-Revision": String(revision) }
+        });
         return;
       }
 
@@ -244,8 +538,12 @@ export function createRequestHandler({
           segments[0] === "api" && segments[1] === "reviews" &&
           segments[3] === "decisions") {
         const input = await readJson(request);
-        const result = store.submitDecision(segments[2], input, { now });
-        sendJson(response, 200, result);
+        const result = await writer.mutate(
+          (candidate) => candidate.submitDecision(segments[2], input, { now })
+        );
+        sendJson(response, 200, result, {
+          headers: { "X-IntentCanvas-Revision": String(result.revision) }
+        });
         return;
       }
 
@@ -253,24 +551,31 @@ export function createRequestHandler({
           segments[0] === "api" && segments[1] === "reviews" &&
           segments[3] === "modules" && segments[5] === "approval") {
         const body = await readJson(request);
-        const result = store.submitDecision(
-          segments[2],
-          { ...body, moduleId: segments[4] },
-          { now }
+        const result = await writer.mutate(
+          (candidate) => candidate.submitDecision(
+            segments[2],
+            { ...body, moduleId: segments[4] },
+            { now }
+          )
         );
-        sendJson(response, 200, result);
+        sendJson(response, 200, result, {
+          headers: { "X-IntentCanvas-Revision": String(result.revision) }
+        });
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/api/events") {
         const event = await readJson(request);
-        const result = store.recordEvent(event, { now });
+        const result = await writer.mutate(
+          (candidate) => candidate.recordEvent(event, { now })
+        );
         sendJson(response, 202, result);
         return;
       }
 
       if (isApi) {
-        const status = ["GET", "HEAD", "POST", "OPTIONS"].includes(request.method ?? "")
+        const status = ["GET", "HEAD", "POST", "PUT", "PATCH", "OPTIONS"]
+          .includes(request.method ?? "")
           ? 404
           : 405;
         sendJson(response, status, {
@@ -283,7 +588,12 @@ export function createRequestHandler({
       }
 
       if (request.method === "GET" || request.method === "HEAD") {
-        await serveStatic(request, response, url.pathname, studioDirectory);
+        await serveStatic(
+          request,
+          response,
+          rawPathname ?? url.pathname,
+          studioDirectory
+        );
         return;
       }
 
@@ -315,10 +625,67 @@ export async function startRuntime({
   store = createDefaultReviewStore(),
   studioDirectory = resolveStudioDirectory(),
   logger = console,
-  now = () => new Date()
+  now = () => new Date(),
+  dataDirectory = resolveDataDirectory(),
+  persistence: configuredPersistence,
+  authToken: configuredAuthToken,
+  authOptions = {},
+  authSessionOptions = {}
 } = {}) {
   validatePort(port);
-  const server = createRuntimeServer({ store, studioDirectory, now });
+  const persistence = configuredPersistence === undefined
+    ? (dataDirectory === null || dataDirectory === false
+      ? null
+      : new JsonFileReviewPersistence(resolveDataDirectory(dataDirectory)))
+    : configuredPersistence;
+  let dataLock = null;
+
+  try {
+    if (typeof persistence?.directory === "string") {
+      dataLock = await acquireRuntimeDataDirectoryLock(persistence.directory);
+    }
+
+  if (persistence) {
+    try {
+      const state = await persistence.load();
+      if (state === null) {
+        await persistence.save(store.exportState());
+      } else {
+        store.restoreState(state);
+      }
+    } catch (error) {
+      const failure = error instanceof RuntimePersistenceError
+        ? error
+        : new RuntimePersistenceError(
+          `IntentCanvas Runtime state at ${persistence.statePath ?? "the configured data directory"} ` +
+            `is invalid; fix or move it before restarting (it was not overwritten): ${error.message}`,
+          {
+            code: "invalid_runtime_state",
+            path: persistence.statePath,
+            cause: error
+          }
+        );
+      logger.error?.(failure.message);
+      throw failure;
+    }
+  }
+
+  const writer = new SerializedReviewWriter(store, persistence);
+  const authentication = configuredAuthToken === false
+    ? { token: false, path: null, created: false }
+    : typeof configuredAuthToken === "string"
+      ? { token: validateAuthToken(configuredAuthToken), path: null, created: false }
+      : await loadOrCreateAuthToken(authOptions);
+  const authManager = authentication.token === false
+    ? false
+    : new RuntimeAuthManager(authentication.token, authSessionOptions);
+  const server = createRuntimeServer({
+    store,
+    studioDirectory,
+    now,
+    writer,
+    authManager
+  });
 
   await new Promise((resolveListen, rejectListen) => {
     const onError = (error) => {
@@ -338,9 +705,13 @@ export async function startRuntime({
   const actualPort = typeof address === "object" && address ? address.port : port;
   const baseUrl = `http://${RUNTIME_HOST}:${actualPort}`;
   const primaryReview = store.listReviews()[0] ?? null;
-  const reviewUrl = primaryReview
-    ? `${baseUrl}/?review=${encodeURIComponent(primaryReview.id)}`
-    : baseUrl;
+  const reviewLink = new URL(baseUrl);
+  if (primaryReview) reviewLink.searchParams.set("review", primaryReview.id);
+  if (primaryReview && authManager !== false) {
+    const handoff = authManager.createHandoff(primaryReview.id);
+    reviewLink.searchParams.set("handoff", handoff.handoff);
+  }
+  const reviewUrl = reviewLink.href;
 
   logger.log(`IntentCanvas Runtime: ${baseUrl}`);
   logger.log(`Review ready: ${osc8Hyperlink("Open visual plan", reviewUrl)}`);
@@ -352,8 +723,20 @@ export async function startRuntime({
     port: actualPort,
     baseUrl,
     reviewUrl,
-    close: () => new Promise((resolveClose, rejectClose) => {
-      server.close((error) => error ? rejectClose(error) : resolveClose());
-    })
+    authTokenFile: authentication.path,
+    dataDirectory: persistence?.directory ?? null,
+    close: async () => {
+      try {
+        await new Promise((resolveClose, rejectClose) => {
+          server.close((error) => error ? rejectClose(error) : resolveClose());
+        });
+      } finally {
+        await dataLock?.release();
+      }
+    }
   };
+  } catch (error) {
+    await dataLock?.release();
+    throw error;
+  }
 }

@@ -8,12 +8,36 @@ importers:
 
   .: {}
 
+  apps/cli:
+    dependencies:
+      '@intentcanvas/local-auth':
+        specifier: workspace:*
+        version: link:../../packages/local-auth
+      '@intentcanvas/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   apps/runtime:
     dependencies:
+      '@intentcanvas/local-auth':
+        specifier: workspace:*
+        version: link:../../packages/local-auth
       '@intentcanvas/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
 
   apps/studio: {}
+
+  packages/bridge: {}
+
+  packages/code-facts: {}
+
+  packages/local-auth: {}
+
+  packages/plan-diff:
+    dependencies:
+      '@intentcanvas/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/protocol: {}

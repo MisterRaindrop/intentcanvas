@@ -31,6 +31,35 @@ const NODE_TYPES = Object.freeze([
   "service",
   "data"
 ]);
+const MAX_IDENTIFIER_LENGTH = 256;
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u;
+
+const PLAN_KEYS = Object.freeze([
+  "schemaVersion", "kind", "id", "title", "status", "createdAt", "project",
+  "goal", "summary", "modules", "relationships", "risks", "verification"
+]);
+const PROJECT_KEYS = Object.freeze(["name", "repository", "baseRef"]);
+const MODULE_KEYS = Object.freeze([
+  "id", "name", "order", "status", "layer", "summary", "entryPoints", "diagram",
+  "changes", "approval"
+]);
+const ENTRY_POINT_KEYS = Object.freeze(["signature", "file", "line"]);
+const DIAGRAM_KEYS = Object.freeze(["nodes", "edges"]);
+const DIAGRAM_NODE_KEYS = Object.freeze(["id", "label", "type", "status", "description"]);
+const DIAGRAM_EDGE_KEYS = Object.freeze(["from", "to", "label", "status"]);
+const CHANGE_KEYS = Object.freeze([
+  "id", "title", "status", "location", "rationale", "callPath", "pseudocode"
+]);
+const LOCATION_KEYS = Object.freeze(["file", "symbol"]);
+const CALL_PATH_STEP_KEYS = Object.freeze(["label", "status", "collapsedCount"]);
+const PSEUDOCODE_KEYS = Object.freeze(["language", "before", "after"]);
+const APPROVAL_KEYS = Object.freeze(["decision", "comment", "updatedAt"]);
+const RELATIONSHIP_KEYS = Object.freeze(["from", "to", "label", "status", "summary"]);
+const RISK_KEYS = Object.freeze(["id", "level", "title", "mitigation", "moduleIds"]);
+const VERIFICATION_KEYS = Object.freeze(["id", "type", "command", "expected", "moduleIds"]);
+const APPROVAL_DECISION_KEYS = Object.freeze([
+  "moduleId", "expectedRevision", "decision", "comment"
+]);
 
 function addError(errors, path, message, code = "invalid_value") {
   errors.push({ path, message, code });
@@ -72,6 +101,38 @@ function requireString(value, path, errors, { allowEmpty = false } = {}) {
   return true;
 }
 
+function rejectUnknownKeys(value, allowedKeys, path, errors) {
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      addError(errors, `${path}.${key}`, "is not a recognized property", "unknown_property");
+    }
+  }
+}
+
+function requireIdentifier(value, path, errors) {
+  if (!requireString(value, path, errors)) return false;
+  if ([...value].length > MAX_IDENTIFIER_LENGTH) {
+    addError(
+      errors,
+      path,
+      `must be at most ${MAX_IDENTIFIER_LENGTH} characters`,
+      "too_large"
+    );
+    return false;
+  }
+  if (!IDENTIFIER_PATTERN.test(value)) {
+    addError(
+      errors,
+      path,
+      "must start with a letter or digit and contain only letters, digits, '.', '_', ':', '/', or '-'",
+      "invalid_identifier"
+    );
+    return false;
+  }
+  return true;
+}
+
 function requireEnum(value, allowed, path, errors) {
   if (!allowed.includes(value)) {
     addError(errors, path, `must be one of: ${allowed.join(", ")}`, "invalid_enum");
@@ -82,6 +143,7 @@ function requireEnum(value, allowed, path, errors) {
 
 function validateProject(project, errors) {
   if (!requireObject(project, "$.project", errors)) return;
+  rejectUnknownKeys(project, PROJECT_KEYS, "$.project", errors);
   requireString(project.name, "$.project.name", errors);
   requireString(project.repository, "$.project.repository", errors);
   requireString(project.baseRef, "$.project.baseRef", errors);
@@ -89,6 +151,7 @@ function validateProject(project, errors) {
 
 function validateEntryPoint(entryPoint, path, errors) {
   if (!requireObject(entryPoint, path, errors)) return;
+  rejectUnknownKeys(entryPoint, ENTRY_POINT_KEYS, path, errors);
   requireString(entryPoint.signature, `${path}.signature`, errors);
   requireString(entryPoint.file, `${path}.file`, errors);
   if (entryPoint.line !== undefined &&
@@ -99,13 +162,15 @@ function validateEntryPoint(entryPoint, path, errors) {
 
 function validateDiagram(diagram, path, errors) {
   if (!requireObject(diagram, path, errors)) return;
+  rejectUnknownKeys(diagram, DIAGRAM_KEYS, path, errors);
   const nodeIds = new Set();
 
   if (requireArray(diagram.nodes, `${path}.nodes`, errors, { nonEmpty: true })) {
     diagram.nodes.forEach((node, index) => {
       const nodePath = `${path}.nodes[${index}]`;
       if (!requireObject(node, nodePath, errors)) return;
-      if (requireString(node.id, `${nodePath}.id`, errors)) {
+      rejectUnknownKeys(node, DIAGRAM_NODE_KEYS, nodePath, errors);
+      if (requireIdentifier(node.id, `${nodePath}.id`, errors)) {
         if (nodeIds.has(node.id)) {
           addError(errors, `${nodePath}.id`, "must be unique within the diagram", "duplicate_id");
         }
@@ -124,10 +189,11 @@ function validateDiagram(diagram, path, errors) {
     diagram.edges.forEach((edge, index) => {
       const edgePath = `${path}.edges[${index}]`;
       if (!requireObject(edge, edgePath, errors)) return;
-      if (requireString(edge.from, `${edgePath}.from`, errors) && !nodeIds.has(edge.from)) {
+      rejectUnknownKeys(edge, DIAGRAM_EDGE_KEYS, edgePath, errors);
+      if (requireIdentifier(edge.from, `${edgePath}.from`, errors) && !nodeIds.has(edge.from)) {
         addError(errors, `${edgePath}.from`, "must reference a node in this diagram", "unknown_reference");
       }
-      if (requireString(edge.to, `${edgePath}.to`, errors) && !nodeIds.has(edge.to)) {
+      if (requireIdentifier(edge.to, `${edgePath}.to`, errors) && !nodeIds.has(edge.to)) {
         addError(errors, `${edgePath}.to`, "must reference a node in this diagram", "unknown_reference");
       }
       if (edge.label !== undefined) {
@@ -142,12 +208,14 @@ function validateDiagram(diagram, path, errors) {
 
 function validateChange(change, path, errors) {
   if (!requireObject(change, path, errors)) return;
-  requireString(change.id, `${path}.id`, errors);
+  rejectUnknownKeys(change, CHANGE_KEYS, path, errors);
+  requireIdentifier(change.id, `${path}.id`, errors);
   requireString(change.title, `${path}.title`, errors);
   requireEnum(change.status, CHANGE_STATUSES, `${path}.status`, errors);
   requireString(change.rationale, `${path}.rationale`, errors);
 
   if (requireObject(change.location, `${path}.location`, errors)) {
+    rejectUnknownKeys(change.location, LOCATION_KEYS, `${path}.location`, errors);
     requireString(change.location.file, `${path}.location.file`, errors);
     requireString(change.location.symbol, `${path}.location.symbol`, errors);
   }
@@ -156,6 +224,7 @@ function validateChange(change, path, errors) {
     change.callPath.forEach((step, index) => {
       const stepPath = `${path}.callPath[${index}]`;
       if (!requireObject(step, stepPath, errors)) return;
+      rejectUnknownKeys(step, CALL_PATH_STEP_KEYS, stepPath, errors);
       requireString(step.label, `${stepPath}.label`, errors);
       requireEnum(step.status, CHANGE_STATUSES, `${stepPath}.status`, errors);
       if (step.collapsedCount !== undefined &&
@@ -171,6 +240,7 @@ function validateChange(change, path, errors) {
   }
 
   if (requireObject(change.pseudocode, `${path}.pseudocode`, errors)) {
+    rejectUnknownKeys(change.pseudocode, PSEUDOCODE_KEYS, `${path}.pseudocode`, errors);
     requireString(change.pseudocode.language, `${path}.pseudocode.language`, errors);
     requireString(change.pseudocode.before, `${path}.pseudocode.before`, errors, { allowEmpty: true });
     requireString(change.pseudocode.after, `${path}.pseudocode.after`, errors, { allowEmpty: true });
@@ -179,6 +249,7 @@ function validateChange(change, path, errors) {
 
 function validateApproval(approval, path, errors) {
   if (!requireObject(approval, path, errors)) return;
+  rejectUnknownKeys(approval, APPROVAL_KEYS, path, errors);
   requireEnum(approval.decision, APPROVAL_DECISIONS, `${path}.decision`, errors);
   requireString(approval.comment, `${path}.comment`, errors, { allowEmpty: true });
   if (approval.decision === "changes_requested" &&
@@ -201,8 +272,9 @@ function validateApproval(approval, path, errors) {
 function validateModule(module, index, moduleIds, errors) {
   const path = `$.modules[${index}]`;
   if (!requireObject(module, path, errors)) return;
+  rejectUnknownKeys(module, MODULE_KEYS, path, errors);
 
-  if (requireString(module.id, `${path}.id`, errors)) {
+  if (requireIdentifier(module.id, `${path}.id`, errors)) {
     if (moduleIds.has(module.id)) {
       addError(errors, `${path}.id`, "must be unique", "duplicate_id");
     }
@@ -243,11 +315,12 @@ function validateRelationships(relationships, moduleIds, errors) {
   relationships.forEach((relationship, index) => {
     const path = `$.relationships[${index}]`;
     if (!requireObject(relationship, path, errors)) return;
-    if (requireString(relationship.from, `${path}.from`, errors) &&
+    rejectUnknownKeys(relationship, RELATIONSHIP_KEYS, path, errors);
+    if (requireIdentifier(relationship.from, `${path}.from`, errors) &&
         !moduleIds.has(relationship.from)) {
       addError(errors, `${path}.from`, "must reference a module", "unknown_reference");
     }
-    if (requireString(relationship.to, `${path}.to`, errors) &&
+    if (requireIdentifier(relationship.to, `${path}.to`, errors) &&
         !moduleIds.has(relationship.to)) {
       addError(errors, `${path}.to`, "must reference a module", "unknown_reference");
     }
@@ -262,13 +335,14 @@ function validateRisks(risks, moduleIds, errors) {
   risks.forEach((risk, index) => {
     const path = `$.risks[${index}]`;
     if (!requireObject(risk, path, errors)) return;
-    requireString(risk.id, `${path}.id`, errors);
+    rejectUnknownKeys(risk, RISK_KEYS, path, errors);
+    requireIdentifier(risk.id, `${path}.id`, errors);
     requireEnum(risk.level, RISK_LEVELS, `${path}.level`, errors);
     requireString(risk.title, `${path}.title`, errors);
     requireString(risk.mitigation, `${path}.mitigation`, errors);
     if (requireArray(risk.moduleIds, `${path}.moduleIds`, errors, { nonEmpty: true })) {
       risk.moduleIds.forEach((moduleId, moduleIndex) => {
-        if (requireString(moduleId, `${path}.moduleIds[${moduleIndex}]`, errors) &&
+        if (requireIdentifier(moduleId, `${path}.moduleIds[${moduleIndex}]`, errors) &&
             !moduleIds.has(moduleId)) {
           addError(
             errors,
@@ -287,13 +361,14 @@ function validateVerification(verification, moduleIds, errors) {
   verification.forEach((check, index) => {
     const path = `$.verification[${index}]`;
     if (!requireObject(check, path, errors)) return;
-    requireString(check.id, `${path}.id`, errors);
+    rejectUnknownKeys(check, VERIFICATION_KEYS, path, errors);
+    requireIdentifier(check.id, `${path}.id`, errors);
     requireString(check.type, `${path}.type`, errors);
     requireString(check.command, `${path}.command`, errors);
     requireString(check.expected, `${path}.expected`, errors);
     if (requireArray(check.moduleIds, `${path}.moduleIds`, errors)) {
       check.moduleIds.forEach((moduleId, moduleIndex) => {
-        if (requireString(moduleId, `${path}.moduleIds[${moduleIndex}]`, errors) &&
+        if (requireIdentifier(moduleId, `${path}.moduleIds[${moduleIndex}]`, errors) &&
             !moduleIds.has(moduleId)) {
           addError(
             errors,
@@ -316,6 +391,7 @@ function validateVerification(verification, moduleIds, errors) {
 export function validatePlanModel(plan) {
   const errors = [];
   if (!requireObject(plan, "$", errors)) return { valid: false, errors };
+  rejectUnknownKeys(plan, PLAN_KEYS, "$", errors);
 
   if (requireString(plan.schemaVersion, "$.schemaVersion", errors) &&
       plan.schemaVersion !== PLAN_SCHEMA_VERSION) {
@@ -329,7 +405,7 @@ export function validatePlanModel(plan) {
   if (plan.kind !== PLAN_KIND) {
     addError(errors, "$.kind", `must equal ${PLAN_KIND}`, "invalid_kind");
   }
-  requireString(plan.id, "$.id", errors);
+  requireIdentifier(plan.id, "$.id", errors);
   requireString(plan.title, "$.title", errors);
   requireEnum(plan.status, PLAN_STATUSES, "$.status", errors);
   if (requireString(plan.createdAt, "$.createdAt", errors) && Number.isNaN(Date.parse(plan.createdAt))) {
@@ -364,7 +440,16 @@ export function assertPlanModel(plan) {
 export function validateApprovalDecision(value) {
   const errors = [];
   if (!requireObject(value, "$", errors)) return { valid: false, errors };
-  requireString(value.moduleId, "$.moduleId", errors);
+  rejectUnknownKeys(value, APPROVAL_DECISION_KEYS, "$", errors);
+  requireIdentifier(value.moduleId, "$.moduleId", errors);
+  if (!Number.isInteger(value.expectedRevision) || value.expectedRevision < 1) {
+    addError(
+      errors,
+      "$.expectedRevision",
+      "must be a positive integer",
+      "invalid_number"
+    );
+  }
   requireEnum(
     value.decision,
     APPROVAL_DECISIONS.filter((decision) => decision !== "pending"),

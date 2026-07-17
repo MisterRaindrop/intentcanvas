@@ -1,0 +1,19 @@
+{
+  "name": "@intentcanvas/local-auth",
+  "version": "0.2.0",
+  "description": "Per-user local authentication token helpers for IntentCanvas.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -24,10 +24,34 @@ test("studio contains the complete overview and module review journey", async ()
     "下一个模块",
     "批准这个模块",
     "要求调整",
-    "返回总体设计"
+    "返回总体设计",
+    "主要风险",
+    "验证方式",
+    "查看计划版本历史"
   ]) {
     assert.match(html, new RegExp(expectedCopy), `missing UI copy: ${expectedCopy}`);
   }
+});
+
+test("studio exposes Runtime revisions and refreshes the visible review", async () => {
+  const script = await readStudioFile("app.js");
+
+  assert.match(script, /const REVISIONS_ENDPOINT = `\$\{REVIEW_ENDPOINT\}\/revisions`/);
+  assert.match(script, /response\.headers\.get\("X-IntentCanvas-Revision"\)/);
+  assert.match(script, /async function fetchRevisions\(\)/);
+  assert.match(script, /function renderRevisionHistory\(revisions\)/);
+  assert.match(script, /"refresh-review-button"\]\.addEventListener\("click", fetchReview\)/);
+  assert.match(script, /"revision-history"\]\.addEventListener\("toggle"/);
+});
+
+test("studio renders plan risks and verification evidence", async () => {
+  const script = await readStudioFile("app.js");
+
+  assert.match(script, /function renderRisks\(\)/);
+  assert.match(script, /state\.review\.risks\.forEach/);
+  assert.match(script, /function renderVerification\(\)/);
+  assert.match(script, /state\.review\.verification\.forEach/);
+  assert.match(script, /appendModuleLinks/);
 });
 
 test("studio selects the requested review and calls the decisions API", async () => {
@@ -38,8 +62,24 @@ test("studio selects the requested review and calls the decisions API", async ()
   assert.match(script, /\/decisions/);
   assert.match(script, /method:\s*"POST"/);
   assert.match(script, /moduleId:\s*module\.id/);
+  assert.match(script, /expectedRevision:\s*state\.revision/);
+  assert.match(script, /response\.status === 409/);
+  assert.match(script, /headers\.Authorization = `Bearer \$\{state\.sessionToken\}`/);
   assert.match(script, /submitDecision\("approved"\)/);
   assert.match(script, /submitDecision\("changes_requested"\)/);
+});
+
+test("studio exchanges a one-use handoff for an origin-scoped browser session", async () => {
+  const script = await readStudioFile("app.js");
+
+  assert.match(script, /function handoffFromSearch\(\)/);
+  assert.match(script, /async function exchangeBrowserHandoff\(\)/);
+  assert.match(script, /fetch\("\/api\/session"/);
+  assert.match(script, /parameters\.delete\(HANDOFF_PARAM\)/);
+  assert.match(script, /history\.replaceState/);
+  assert.match(script, /打开链接已经过期或使用过/);
+  assert.match(script, /sessionStorage\.setItem\(SESSION_STORAGE_KEY, session\)/);
+  assert.doesNotMatch(script, /document\.cookie/);
 });
 
 test("studio validates and adopts the Runtime response", async () => {
@@ -48,7 +88,16 @@ test("studio validates and adopts the Runtime response", async () => {
   assert.match(script, /normalizeDecisionResponse\(await response\.json\(\)/);
   assert.match(script, /module\.approval = result\.approval/);
   assert.match(script, /state\.review\.status = result\.reviewStatus/);
+  assert.match(script, /state\.revision = result\.revision/);
   assert.doesNotMatch(script, /updatedAt:\s*new Date\(\)\.toISOString\(\)/);
+});
+
+test("studio module flow only uses statuses validated by the review model", async () => {
+  const script = await readStudioFile("app.js");
+
+  assert.match(script, /status:\s*step\.status/);
+  assert.match(script, /status:\s*node\.status/);
+  assert.doesNotMatch(script, /normalizeStatus/);
 });
 
 test("studio loads its browser code as modules", async () => {

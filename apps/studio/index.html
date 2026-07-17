@@ -20,7 +20,9 @@
       </a>
       <div class="header-context" aria-live="polite">
         <span id="connection-status" class="connection-status is-loading">正在载入计划</span>
+        <span id="review-revision" class="review-revision">版本 --</span>
         <span id="review-id" class="review-id">doris-tde-demo</span>
+        <button id="refresh-review-button" class="header-button" type="button">刷新</button>
       </div>
     </header>
 
@@ -55,6 +57,12 @@
           </div>
         </div>
 
+        <details id="revision-history" class="revision-history">
+          <summary>查看计划版本历史</summary>
+          <p id="revision-message" class="revision-message">展开后读取当前计划的修订记录。</p>
+          <ol id="revision-list" class="revision-list"></ol>
+        </details>
+
         <section class="overview-section" aria-labelledby="architecture-title">
           <div class="section-heading">
             <div>
@@ -86,6 +94,30 @@
             </div>
           </div>
           <ol id="module-summaries" class="module-summaries"></ol>
+        </section>
+
+        <section class="overview-section review-evidence" aria-label="风险与验收计划">
+          <article class="evidence-panel" aria-labelledby="risks-title">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-kicker">03 · 需要留意</p>
+                <h2 id="risks-title">主要风险</h2>
+                <p>只保留会影响正确性、安全、性能或生命周期的风险。</p>
+              </div>
+            </div>
+            <ol id="risks-list" class="evidence-list risks-list"></ol>
+          </article>
+
+          <article class="evidence-panel" aria-labelledby="verification-title">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-kicker">04 · 怎么验收</p>
+                <h2 id="verification-title">验证方式</h2>
+                <p>明确执行什么检查，以及什么结果才算通过。</p>
+              </div>
+            </div>
+            <ol id="verification-list" class="evidence-list verification-list"></ol>
+          </article>
         </section>
       </section>
 

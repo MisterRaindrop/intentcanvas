@@ -1,0 +1,26 @@
+{
+  "name": "@intentcanvas/plan-diff",
+  "version": "0.2.0",
+  "description": "Compare approved IntentCanvas plans with proposed models or before-and-after Code Facts.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "intentcanvas-diff": "./src/bin.js",
+    "intentcanvas-facts-diff": "./src/facts-bin.js"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@intentcanvas/protocol": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

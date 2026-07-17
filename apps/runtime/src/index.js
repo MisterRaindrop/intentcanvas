@@ -17,6 +17,7 @@ try {
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+  process.once("SIGHUP", shutdown);
 } catch (error) {
   console.error(`IntentCanvas Runtime failed to start: ${error.message}`);
   process.exitCode = 1;

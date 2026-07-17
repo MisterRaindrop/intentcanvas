@@ -1,6 +1,6 @@
 {
   "name": "intentcanvas",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Visual-first planning, approval, and plan-versus-actual review for AI-assisted code changes.",
   "author": {
     "name": "liuxiaoyu",
@@ -8,6 +8,7 @@
   },
   "homepage": "https://github.com/MisterRaindrop/intentcanvas#readme",
   "repository": "https://github.com/MisterRaindrop/intentcanvas",
+  "license": "Apache-2.0",
   "keywords": [
     "code-planning",
     "architecture",

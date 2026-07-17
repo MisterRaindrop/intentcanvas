@@ -233,5 +233,8 @@ export function normalizeDecisionResponse(raw, { expectedReviewId, expectedModul
   }
   validateApproval(raw.approval, "decisionResponse.approval", { requireUpdatedAt: true });
   requiredEnum(raw.reviewStatus, PLAN_STATUSES, "decisionResponse.reviewStatus");
+  if (!Number.isInteger(raw.revision) || raw.revision < 1) {
+    incompatible("decisionResponse.revision", "必须是当前计划的正整数版本");
+  }
   return structuredClone(raw);
 }

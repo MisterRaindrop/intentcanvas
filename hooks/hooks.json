@@ -10,6 +10,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook-event.mjs"
             ],
+            "async": true,
             "timeout": 2
           }
         ]
@@ -24,6 +25,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook-event.mjs"
             ],
+            "async": true,
             "timeout": 2
           }
         ]
@@ -38,6 +40,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook-event.mjs"
             ],
+            "async": true,
             "timeout": 2
           }
         ]
@@ -52,6 +55,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook-event.mjs"
             ],
+            "async": true,
             "timeout": 2
           }
         ]

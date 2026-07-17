@@ -1,0 +1,25 @@
+{
+  "name": "@intentcanvas/code-facts",
+  "version": "0.2.0",
+  "description": "Deterministic, read-only C/C++ code fact extraction for IntentCanvas.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "bin": {
+    "intentcanvas-code-facts": "./bin/code-facts.js",
+    "code-facts": "./bin/code-facts.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

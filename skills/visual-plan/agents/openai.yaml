@@ -1,4 +1,4 @@
 interface:
   display_name: "Visual Plan"
-  short_description: "Review AI code plans as diagrams before execution"
-  default_prompt: "Use $visual-plan to create a visual code-change plan and wait for my approval before implementation."
+  short_description: "Approve, implement, and diff validated visual plans"
+  default_prompt: "Use $visual-plan to validate and import a code plan, wait for module approval, implement approved scope, and verify drift."

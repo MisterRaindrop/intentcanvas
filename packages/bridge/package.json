@@ -1,0 +1,25 @@
+{
+  "name": "@intentcanvas/bridge",
+  "version": "0.2.0",
+  "description": "Dependency-free local SSH bridge and review handoff helpers for IntentCanvas.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./cli": "./src/cli.js"
+  },
+  "bin": {
+    "intentcanvas-bridge": "./bin/intentcanvas-bridge.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

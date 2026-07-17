@@ -92,7 +92,8 @@ test("a complete Runtime decision response is adopted without local fabrication"
       comment: "密钥必须由 KeyManager 提供",
       updatedAt: "2026-07-17T08:30:00.000Z"
     },
-    reviewStatus: "changes_requested"
+    reviewStatus: "changes_requested",
+    revision: 3
   };
 
   const result = normalizeDecisionResponse(response, {
@@ -108,7 +109,8 @@ test("incomplete or cross-module decision responses are rejected", () => {
     reviewId: "review-1",
     moduleId: "other-module",
     approval: { decision: "approved", comment: "", updatedAt: null },
-    reviewStatus: "in_review"
+    reviewStatus: "in_review",
+    revision: 3
   };
 
   assert.throws(
@@ -119,5 +121,11 @@ test("incomplete or cross-module decision responses are rejected", () => {
   assert.throws(
     () => normalizeDecisionResponse(response, { expectedModuleId: "storage" }),
     /updatedAt/
+  );
+  response.approval.updatedAt = "2026-07-17T08:30:00.000Z";
+  delete response.revision;
+  assert.throws(
+    () => normalizeDecisionResponse(response, { expectedModuleId: "storage" }),
+    /decisionResponse\.revision/
   );
 });

@@ -54,3 +54,58 @@ test("creates and validates a versioned acknowledgement", () => {
   assert.equal(ack.eventType, "plan_ready");
   assert.deepEqual(validateAgentEventAck(ack), { valid: true, errors: [] });
 });
+
+test("accepts the explicit Agent event payload vocabulary", () => {
+  const result = validateAgentEvent(event({
+    reviewId: "review-1",
+    payload: {
+      hookEventName: "PostToolUse",
+      sessionSource: "startup",
+      sessionReason: "user requested a review",
+      notificationType: "permission_prompt",
+      toolName: "Bash",
+      moduleIds: ["runtime", "studio"],
+      outcome: "success",
+      semanticType: "tool_finished",
+      reviewId: "review-1",
+      result: "done",
+      planId: "doris-tde-demo"
+    }
+  }));
+
+  assert.deepEqual(result, { valid: true, errors: [] });
+});
+
+test("rejects unknown Agent event, project, and payload properties", () => {
+  const result = validateAgentEvent(event({
+    secret: "top-level",
+    project: { cwd: "/srv/doris", environment: { TOKEN: "hidden" } },
+    payload: { planId: "doris-tde-demo", tool_input: { command: "danger" } }
+  }));
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(
+    result.errors
+      .filter((item) => item.code === "unknown_property")
+      .map((item) => item.path),
+    ["$.secret", "$.project.environment", "$.payload.tool_input"]
+  );
+});
+
+test("Agent event identifiers reject controls and excessive length", () => {
+  const result = validateAgentEvent(event({
+    sessionId: "session\nforged",
+    reviewId: "r".repeat(257),
+    payload: { moduleIds: ["runtime\u001b[2J", "runtime;curl"] }
+  }));
+
+  assert.equal(result.valid, false);
+  assert.ok(result.errors.some((item) =>
+    item.path === "$.sessionId" && item.code === "invalid_identifier"));
+  assert.ok(result.errors.some((item) =>
+    item.path === "$.reviewId" && item.code === "too_large"));
+  assert.ok(result.errors.some((item) =>
+    item.path === "$.payload.moduleIds[0]" && item.code === "invalid_identifier"));
+  assert.ok(result.errors.some((item) =>
+    item.path === "$.payload.moduleIds[1]" && item.code === "invalid_identifier"));
+});
