@@ -92,3 +92,7 @@ The Codex package is prepared in `.codex-plugin/plugin.json`; a marketplace entr
 ## Status
 
 IntentCanvas is an early prototype. The current Runtime is local-only; automatic SSH tunnel management, clang-based code extraction, persistent review storage, and Plan-vs-Actual verification are the next milestones.
+
+## License
+
+IntentCanvas is licensed under the [Apache License, Version 2.0](LICENSE).
