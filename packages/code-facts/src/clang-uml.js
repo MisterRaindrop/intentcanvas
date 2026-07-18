@@ -1,9 +1,16 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import { languageForFile } from "./compilation-database.js";
 import { compareText, pathForProject, toPosixPath } from "./path-utils.js";
-import { diagnostic, hashValue, sourceFor } from "./source.js";
+import {
+  diagnostic,
+  hashValue,
+  MAX_ANALYSIS_INPUT_BYTES,
+  readBoundedRegularFile,
+  resolveContainedRegularPath,
+  sourceFor,
+  SourceBoundaryError
+} from "./source.js";
 
 export class ClangUmlError extends Error {
   constructor(message, { code = "invalid_clang_uml", path } = {}) {
@@ -144,7 +151,6 @@ function symbolIdentity(symbol) {
     symbol.name,
     symbol.kind,
     symbol.file,
-    symbol.location ?? null,
     symbol.signature ?? null
   ];
 }
@@ -191,6 +197,15 @@ function makeSymbol(node, {
   }
   if (location !== undefined) base.location = location;
   base.fingerprint = hashValue(JSON.stringify(symbolIdentity(base)));
+  const implementation = firstString(
+    node.source_code,
+    node.sourceCode,
+    node.implementation,
+    node.body
+  );
+  if (implementation !== undefined) {
+    base.implementationFingerprint = hashValue(implementation);
+  }
   base.id = `symbol:${base.fingerprint.slice("sha256:".length, "sha256:".length + 24)}`;
   return base;
 }
@@ -432,16 +447,27 @@ export const parseClangUml = parseClangUmlJson;
 export async function readClangUmlJson(path, options = {}) {
   const absolutePath = resolve(path);
   let text;
+  let canonicalPath;
   try {
-    text = await readFile(absolutePath, "utf8");
+    canonicalPath = await resolveContainedRegularPath(
+      options.projectRoot ?? dirname(absolutePath),
+      absolutePath
+    );
+    text = await readBoundedRegularFile(canonicalPath, {
+      maxBytes: MAX_ANALYSIS_INPUT_BYTES,
+      encoding: "utf8"
+    });
   } catch (error) {
     throw new ClangUmlError(`Unable to read ${absolutePath}: ${error.message}`, {
-      code: "read_failed",
+      code: error instanceof SourceBoundaryError ? error.code : "read_failed",
       path: absolutePath
     });
   }
   try {
-    return parseClangUmlJson(text, { ...options, sourcePath: options.sourcePath ?? absolutePath });
+    return parseClangUmlJson(text, {
+      ...options,
+      sourcePath: options.sourcePath ?? canonicalPath
+    });
   } catch (error) {
     if (error instanceof ClangUmlError) error.path ??= absolutePath;
     throw error;

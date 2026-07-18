@@ -125,6 +125,17 @@ function validateChange(change, path) {
   requiredString(change.pseudocode.language, `${path}.pseudocode.language`);
   requiredString(change.pseudocode.before, `${path}.pseudocode.before`, { allowEmpty: true });
   requiredString(change.pseudocode.after, `${path}.pseudocode.after`, { allowEmpty: true });
+
+  if (change.dependencies !== undefined) {
+    requiredArray(change.dependencies, `${path}.dependencies`).forEach((dependency, index) => {
+      const dependencyPath = `${path}.dependencies[${index}]`;
+      requiredObject(dependency, dependencyPath);
+      requiredEnum(dependency.kind, ["include"], `${dependencyPath}.kind`);
+      requiredString(dependency.from, `${dependencyPath}.from`);
+      requiredString(dependency.to, `${dependencyPath}.to`);
+      requiredEnum(dependency.status, CHANGE_STATUSES, `${dependencyPath}.status`);
+    });
+  }
 }
 
 function validateModule(module, index, moduleIds) {

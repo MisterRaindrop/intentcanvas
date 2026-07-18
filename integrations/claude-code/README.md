@@ -16,12 +16,14 @@ The repository packages are not globally installed by `pnpm install`; the root s
 pnpm intentcanvas status
 pnpm intentcanvas plan validate /path/to/plan.json
 pnpm intentcanvas plan import /path/to/plan.json
+pnpm intentcanvas plan gate <review-id>
+pnpm intentcanvas plan freeze <review-id> /path/to/approved-snapshot.json
 pnpm facts \
   extract /path/to/project --output /path/to/facts.json
 pnpm diff \
-  /path/to/approved-plan.json /path/to/implemented.json --markdown
+  /path/to/approved-snapshot.json /path/to/implemented.json --markdown
 pnpm facts-diff \
-  /path/to/approved-plan.json /path/to/current-facts.json \
+  /path/to/approved-snapshot.json /path/to/current-facts.json \
   /path/to/implemented-facts.json --markdown
 ```
 
@@ -36,11 +38,15 @@ claude plugin validate --strict /absolute/path/to/intentcanvas
 claude --plugin-dir /absolute/path/to/intentcanvas
 ```
 
-Start a new Claude Code session, then invoke `/intentcanvas:visual-plan` or ask Claude to create an IntentCanvas plan. The Skill validates and imports strict Plan JSON, gives you the CLI's clickable Review URL, waits for Runtime module approval, implements only approved scope, and runs the Plan-versus-Actual diff.
+Start a new Claude Code session, then invoke `/intentcanvas:visual-plan` or ask Claude to create an IntentCanvas plan. The Skill validates and imports strict Plan JSON, gives you the CLI's clickable Review URL, waits for full module-by-module approval, freezes that Runtime revision, and runs Plan-versus-Actual verification.
 
-## Hook events
+## Write gate and Hook events
 
-Plugin hooks run asynchronously and fail open. Runtime failure never blocks Claude Code. `INTENTCANVAS_RUNTIME_URL` may be the Runtime origin (`http://127.0.0.1:4317`) or the full `/api/events` endpoint.
+Importing or opening a review writes a private per-user workspace binding outside the repository. The synchronous `PreToolUse` Hook checks that review before Edit, Write, mutating Bash/Agent, and mutating MCP tools. While the review is pending or changed, or if Runtime identity/availability cannot be proven, the Hook denies the write. Full approval releases this additional gate but does not bypass Claude Code's normal permission prompt.
+
+If the user explicitly abandons the workflow, they run `pnpm intentcanvas plan detach` themselves from that project. The Hook deliberately prevents the coding agent from detaching or rebinding a pending gate.
+
+Lifecycle event hooks are separate: they run asynchronously and fail open. `INTENTCANVAS_RUNTIME_URL` may be the Runtime origin (`http://127.0.0.1:4317`) or the full `/api/events` endpoint. Both gate and telemetry verify a fresh Runtime challenge before sending the bearer token.
 
 The adapter uses these canonical mappings:
 

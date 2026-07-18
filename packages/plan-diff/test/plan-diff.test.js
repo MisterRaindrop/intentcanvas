@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createTdePlanFixture } from "@intentcanvas/protocol";
+import { createApprovedSnapshot, createTdePlanFixture } from "@intentcanvas/protocol";
 import {
   DRIFT_REPORT_KIND,
   comparePlanModels,
@@ -41,6 +41,33 @@ test("identical approved and implemented shapes pass", () => {
   assert.equal(report.modules.length, approved.modules.length);
   assert.ok(report.modules.every((module) => module.status === "matched"));
   assert.match(report.approvedDigest, /^[a-f0-9]{64}$/);
+});
+
+test("accepts a revision-bound Approved Snapshot", () => {
+  const approved = approvedPlan();
+  const snapshot = createApprovedSnapshot(approved, {
+    revision: 7,
+    frozenAt: "2026-07-17T01:00:00.000Z"
+  });
+  const report = comparePlanModels(snapshot, implementedFrom(approved));
+
+  assert.equal(report.status, "pass");
+  assert.equal(report.approvedRevision, 7);
+  assert.equal(report.approvedDigest, snapshot.planDigest);
+});
+
+test("an approved copy and a different project cannot pass as Actual", () => {
+  const approved = approvedPlan();
+  const approvedCopy = structuredClone(approved);
+  const copyReport = comparePlanModels(approved, approvedCopy);
+  assert.equal(copyReport.status, "review_required");
+  assert.ok(copyReport.findings.some((item) => item.code === "implemented_status_required"));
+
+  const implemented = implementedFrom(approved);
+  implemented.project.baseRef = "different-commit";
+  const projectReport = comparePlanModels(approved, implemented);
+  assert.equal(projectReport.status, "review_required");
+  assert.ok(projectReport.findings.some((item) => item.code === "project_identity_mismatch"));
 });
 
 test("digest is deterministic across object key order", () => {

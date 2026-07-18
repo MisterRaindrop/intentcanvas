@@ -1,7 +1,13 @@
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
 import { compareText, pathForProject, toPosixPath } from "./path-utils.js";
+import {
+  MAX_ANALYSIS_INPUT_BYTES,
+  readBoundedRegularFile,
+  resolveContainedRegularPath,
+  SourceBoundaryError
+} from "./source.js";
 
 const DATABASE_NAME = "compile_commands.json";
 const SKIPPED_DIRECTORIES = new Set([
@@ -317,13 +323,21 @@ export const findCompileCommandsFiles = locateCompilationDatabases;
 /** Read and normalize every command in a compilation database. */
 export async function readCompileCommands(path, { projectRoot } = {}) {
   const databasePath = resolve(path);
+  const root = await realpath(resolve(projectRoot ?? dirname(databasePath)));
   let parsed;
+  let canonicalDatabasePath;
   try {
-    const text = (await readFile(databasePath, "utf8")).replace(/^\uFEFF/u, "");
+    canonicalDatabasePath = await resolveContainedRegularPath(root, databasePath);
+    const text = (await readBoundedRegularFile(canonicalDatabasePath, {
+      maxBytes: MAX_ANALYSIS_INPUT_BYTES,
+      encoding: "utf8"
+    })).replace(/^\uFEFF/u, "");
     parsed = JSON.parse(text);
   } catch (error) {
     throw new CompilationDatabaseError(`Unable to read ${databasePath}: ${error.message}`, {
-      code: error instanceof SyntaxError ? "invalid_json" : "read_failed",
+      code: error instanceof SyntaxError
+        ? "invalid_json"
+        : error instanceof SourceBoundaryError ? error.code : "read_failed",
       path: databasePath
     });
   }
@@ -334,12 +348,30 @@ export async function readCompileCommands(path, { projectRoot } = {}) {
   }
 
   try {
-    return normalizeCompileCommands(parsed, {
-      databaseDirectory: dirname(databasePath),
-      projectRoot
+    const commands = normalizeCompileCommands(parsed, {
+      databaseDirectory: dirname(canonicalDatabasePath),
+      projectRoot: root
     });
+    for (const command of commands) {
+      const canonicalFile = await resolveContainedRegularPath(root, command.file);
+      command.file = toPosixPath(canonicalFile);
+      command.sourceFile = command.file;
+      command.projectFile = pathForProject(root, canonicalFile);
+    }
+    return commands.sort((left, right) => compareText(left.file, right.file) ||
+      compareText(left.directory, right.directory) ||
+      compareText(JSON.stringify(left.arguments), JSON.stringify(right.arguments)));
   } catch (error) {
-    if (error instanceof CompilationDatabaseError) error.path ??= databasePath;
+    if (error instanceof CompilationDatabaseError) {
+      error.path ??= databasePath;
+      throw error;
+    }
+    if (error instanceof SourceBoundaryError) {
+      throw new CompilationDatabaseError(error.message, {
+        code: error.code,
+        path: error.path ?? databasePath
+      });
+    }
     throw error;
   }
 }

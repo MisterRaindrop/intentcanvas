@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -125,6 +125,7 @@ test("normalizes source and include paths from command and arguments forms", () 
 test("reads a normalized compilation database and reports malformed input", async (t) => {
   const root = await temporaryDirectory(t);
   const database = join(root, "compile_commands.json");
+  await writeFile(join(root, "a.cpp"), "int a = 0;\n");
   await writeFile(database, JSON.stringify([{
     directory: root,
     file: "a.cpp",
@@ -139,5 +140,38 @@ test("reads a normalized compilation database and reports malformed input", asyn
   await assert.rejects(
     readCompileCommands(database),
     (error) => error instanceof CompilationDatabaseError && error.code === "invalid_json"
+  );
+});
+
+test("compilation database ingestion cannot escape the project or read oversized inputs", async (t) => {
+  const root = await temporaryDirectory(t);
+  const outside = await temporaryDirectory(t);
+  const secret = join(outside, "secret.cpp");
+  await writeFile(secret, "const char* secret = \"do-not-read\";\n");
+  const database = join(root, "compile_commands.json");
+  await writeFile(database, JSON.stringify([{
+    directory: outside,
+    file: secret,
+    arguments: ["clang++", "-c", secret]
+  }]));
+
+  await assert.rejects(
+    readCompileCommands(database, { projectRoot: root }),
+    (error) => error instanceof CompilationDatabaseError &&
+      error.code === "source_outside_project"
+  );
+  const outsideDatabase = join(outside, "compile_commands.json");
+  await writeFile(outsideDatabase, "[]\n");
+  await assert.rejects(
+    readCompileCommands(outsideDatabase, { projectRoot: root }),
+    (error) => error instanceof CompilationDatabaseError &&
+      error.code === "source_outside_project"
+  );
+
+  await truncate(database, 64 * 1024 * 1024 + 1);
+  await assert.rejects(
+    readCompileCommands(database, { projectRoot: root }),
+    (error) => error instanceof CompilationDatabaseError &&
+      error.code === "analysis_input_too_large"
   );
 });

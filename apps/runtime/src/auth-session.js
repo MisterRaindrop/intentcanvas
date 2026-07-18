@@ -1,6 +1,9 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
-import { validateAuthToken } from "@intentcanvas/local-auth";
+import {
+  runtimeIdentityProof,
+  validateAuthToken
+} from "@intentcanvas/local-auth";
 import { ReviewStoreError } from "./review-store.js";
 
 export const HANDOFF_TTL_MS = 60_000;
@@ -122,5 +125,9 @@ export class RuntimeAuthManager {
 
   authorize(headers = {}) {
     return this.authenticate(headers) !== null;
+  }
+
+  proveIdentity(challenge) {
+    return runtimeIdentityProof(this.#authToken, challenge);
   }
 }

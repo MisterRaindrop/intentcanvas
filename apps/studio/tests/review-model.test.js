@@ -40,7 +40,13 @@ function validPlan() {
             rationale: "让上层写入逻辑不感知加密。",
             location: { file: "writer.cpp", symbol: "Writer::open" },
             callPath: [{ label: "Writer::open()", status: "modified" }],
-            pseudocode: { language: "cpp", before: "open();", after: "wrap(open());" }
+            pseudocode: { language: "cpp", before: "open();", after: "wrap(open());" },
+            dependencies: [{
+              kind: "include",
+              from: "writer.cpp",
+              to: "encrypted_stream.h",
+              status: "added"
+            }]
           }
         ],
         approval: { decision: "pending", comment: "", updatedAt: null }
@@ -81,6 +87,10 @@ test("unsupported and incomplete Plan Models are rejected instead of repaired", 
   const guessedStatus = validPlan();
   guessedStatus.modules[0].status = "changed";
   assert.throws(() => normalizeReview(guessedStatus), /modules\[0\]\.status/);
+
+  const guessedDependency = validPlan();
+  guessedDependency.modules[0].changes[0].dependencies[0].kind = "guess";
+  assert.throws(() => normalizeReview(guessedDependency), /dependencies\[0\]\.kind/);
 });
 
 test("a complete Runtime decision response is adopted without local fabrication", () => {

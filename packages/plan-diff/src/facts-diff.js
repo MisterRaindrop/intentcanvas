@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 
-import { assertCodeFacts, assertPlanModel } from "@intentcanvas/protocol";
+import {
+  APPROVED_SNAPSHOT_KIND,
+  assertApprovedSnapshot,
+  assertCodeFacts,
+  assertPlanModel
+} from "@intentcanvas/protocol";
 
 export const CODE_FACTS_DIFF_SCHEMA_VERSION = "1.0.0";
 export const CODE_FACTS_DIFF_KIND = "IntentCanvasCodeFactsDiff";
@@ -66,7 +71,8 @@ function evidenceShape(value, fallbackConfidence) {
   return {
     confidence: value.confidence ?? fallbackConfidence ?? "low",
     source: sourceShape(value.source),
-    fingerprint: value.fingerprint ?? null
+    fingerprint: value.fingerprint ?? null,
+    implementationFingerprint: value.implementationFingerprint ?? null
   };
 }
 
@@ -119,7 +125,8 @@ function symbolComparable(symbol) {
     name: symbol.name,
     qualifiedName: symbol.qualifiedName ?? null,
     signature: normalizeSignature(symbol.signature),
-    fingerprint: symbol.fingerprint ?? null
+    fingerprint: symbol.fingerprint ?? null,
+    implementationFingerprint: symbol.implementationFingerprint ?? null
   };
 }
 
@@ -132,6 +139,7 @@ function symbolView(symbol) {
     qualifiedName: symbol.qualifiedName ?? null,
     signature: symbol.signature ?? null,
     fingerprint: symbol.fingerprint ?? null,
+    implementationFingerprint: symbol.implementationFingerprint ?? null,
     confidence: symbol.confidence,
     source: sourceShape(symbol.source)
   };
@@ -355,6 +363,8 @@ function normalizedFactsForDigest(facts) {
   return {
     project: {
       name: facts.project.name,
+      repository: facts.project.repository ?? null,
+      baseRef: facts.project.baseRef ?? null,
       compileCommands: facts.project.compileCommands ?? null,
       buildSystems: [...(facts.project.buildSystems ?? [])].sort((left, right) => (
         compareText(`${left.type}\u0000${left.path}`, `${right.type}\u0000${right.path}`)
@@ -369,6 +379,7 @@ function normalizedFactsForDigest(facts) {
     includeEdges: includeEdges.sort((left, right) => compareText(left.identity, right.identity)),
     callEdges: callEdges.sort((left, right) => compareText(left.identity, right.identity)),
     diagnostics: sortedDiagnostics(facts.diagnostics),
+    coverage: facts.coverage ?? null,
     confidence: facts.confidence,
     source: sourceShape(facts.source)
   };
@@ -455,13 +466,15 @@ export function compareCodeFacts(currentFacts, implementedFacts) {
         projectRoot: currentFacts.project.root,
         confidence: currentFacts.confidence,
         source: sourceShape(currentFacts.source),
-        diagnostics: sortedDiagnostics(currentFacts.diagnostics)
+        diagnostics: sortedDiagnostics(currentFacts.diagnostics),
+        coverage: currentFacts.coverage ?? null
       },
       implemented: {
         projectRoot: implementedFacts.project.root,
         confidence: implementedFacts.confidence,
         source: sourceShape(implementedFacts.source),
-        diagnostics: sortedDiagnostics(implementedFacts.diagnostics)
+        diagnostics: sortedDiagnostics(implementedFacts.diagnostics),
+        coverage: implementedFacts.coverage ?? null
       }
     }
   };
@@ -557,7 +570,13 @@ function evaluatePlannedChange(module, change, diff) {
 
   if (observed) {
     const confidence = minimumConfidence(...evidence.map((record) => record.evidence.confidence));
-    const supported = confidence !== "low" && evidence.every((record) => record.evidence.status === "supported");
+    const implementationProven = change.status !== "modified" || evidence.every((record) => (
+      record.before?.implementationFingerprint &&
+      record.after?.implementationFingerprint &&
+      record.before.implementationFingerprint !== record.after.implementationFingerprint
+    ));
+    const supported = confidence !== "low" && implementationProven &&
+      evidence.every((record) => record.evidence.status === "supported");
     return plannedChangeResult(
       module,
       change,
@@ -565,7 +584,9 @@ function evaluatePlannedChange(module, change, diff) {
       { confidence, records: evidence },
       supported
         ? "The requested symbol change is present in the Code Facts delta."
-        : "The requested symbol change appears present, but its evidence is not strong enough to approve."
+        : change.status === "modified" && !implementationProven
+          ? "The declaration changed or its file moved, but no before/after implementation fingerprints prove a body change."
+          : "The requested symbol change appears present, but its evidence is not strong enough to approve."
     );
   }
 
@@ -610,6 +631,41 @@ function callRecordMatchesPlan(record, modules) {
     }
   }
   return false;
+}
+
+function includeRecordMatchesPlan(record, modules) {
+  const endpoint = record.after ?? record.before;
+  if (!endpoint) return false;
+  return modules.some((module) => module.changes.some((change) => (
+    (change.dependencies ?? []).some((dependency) => (
+      dependency.kind === "include" &&
+      dependency.status === record.changeKind &&
+      dependency.from === endpoint.from &&
+      dependency.to === endpoint.to
+    ))
+  )));
+}
+
+function resolveApprovedPlan(input) {
+  if (input?.kind === APPROVED_SNAPSHOT_KIND) {
+    assertApprovedSnapshot(input);
+    return { plan: input.plan, snapshot: input };
+  }
+  assertPlanModel(input);
+  return { plan: input, snapshot: null };
+}
+
+function normalizeRepository(value) {
+  if (typeof value !== "string" || value.trim().length === 0) return null;
+  const source = value.trim().replace(/^git@([^:]+):/u, "ssh://$1/");
+  try {
+    const url = new URL(source);
+    return `${url.hostname.toLowerCase()}${url.pathname}`
+      .replace(/\.git\/?$/u, "")
+      .replace(/\/$/u, "");
+  } catch {
+    return source.replace(/\.git\/?$/u, "").replace(/\/$/u, "");
+  }
 }
 
 function addDiagnosticsFindings(findings, stage, evidence, allowDiagnosticWarnings) {
@@ -661,11 +717,11 @@ function summarizeAudit(plannedChanges, findings) {
  * possible when every concrete planned symbol change is observed and no
  * unapproved file, symbol, include, or call dependency change is present.
  */
-export function auditPlanAgainstCodeFacts(approvedPlan, currentFacts, implementedFacts, {
+export function auditPlanAgainstCodeFacts(approvedInput, currentFacts, implementedFacts, {
   now = () => new Date(),
   allowDiagnosticWarnings = false
 } = {}) {
-  assertPlanModel(approvedPlan);
+  const { plan: approvedPlan, snapshot } = resolveApprovedPlan(approvedInput);
   assertCodeFacts(currentFacts);
   assertCodeFacts(implementedFacts);
   if (approvedPlan.status !== "approved") {
@@ -709,16 +765,77 @@ export function auditPlanAgainstCodeFacts(approvedPlan, currentFacts, implemente
     }));
   }
 
+
+  const approvedRepository = normalizeRepository(approvedPlan.project.repository);
   for (const [stage, facts] of [["current", currentFacts], ["implemented", implementedFacts]]) {
-    if (facts.confidence === "low") {
+    const actualRepository = normalizeRepository(facts.project.repository);
+    if (actualRepository !== approvedRepository) {
       findings.push(finding({
-        code: "low_global_confidence",
+        code: "facts_project_identity_mismatch",
+        category: "evidence",
+        severity: "error",
+        path: `/evidence/${stage}/project/repository`,
+        message: `${stage} Code Facts repository does not match the approved project.`,
+        planned: approvedPlan.project.repository,
+        actual: facts.project.repository ?? null
+      }));
+    }
+  }
+  if (currentFacts.project.baseRef !== approvedPlan.project.baseRef) {
+    findings.push(finding({
+      code: "facts_base_ref_mismatch",
+      category: "evidence",
+      severity: "error",
+      path: "/evidence/current/project/baseRef",
+      message: "Current Code Facts do not describe the approved base revision.",
+      planned: approvedPlan.project.baseRef,
+      actual: currentFacts.project.baseRef ?? null
+    }));
+  }
+
+  for (const [stage, facts] of [["current", currentFacts], ["implemented", implementedFacts]]) {
+    if (facts.confidence !== "high") {
+      findings.push(finding({
+        code: facts.confidence === "low"
+          ? "low_global_confidence"
+          : "medium_global_confidence",
         category: "evidence",
         severity: "error",
         path: `/evidence/${stage}/confidence`,
-        message: `${stage} Code Facts have low global confidence; absence cannot be proven.`,
+        message: `${stage} Code Facts do not have high global confidence; absence cannot be proven.`,
         actual: facts.confidence,
         evidence: { confidence: facts.confidence, source: sourceShape(facts.source) }
+      }));
+    }
+    if (facts.coverage?.sourceInventoryComplete !== true) {
+      findings.push(finding({
+        code: "source_inventory_incomplete",
+        category: "evidence",
+        severity: "error",
+        path: `/evidence/${stage}/coverage/sourceInventoryComplete`,
+        message: `${stage} Code Facts do not prove a complete C/C++ source inventory.`,
+        actual: facts.coverage ?? null
+      }));
+    }
+    if (facts.coverage?.semanticInventoryComplete !== true) {
+      findings.push(finding({
+        code: "semantic_inventory_incomplete",
+        category: "evidence",
+        severity: "error",
+        path: `/evidence/${stage}/coverage/semanticInventoryComplete`,
+        message: `${stage} Code Facts do not prove that the semantic extractor covered every symbol.`,
+        actual: facts.coverage ?? null
+      }));
+    }
+    if (!Number.isInteger(facts.coverage?.compiledSourceCount) ||
+        facts.coverage.semanticSourceCount < facts.coverage.compiledSourceCount) {
+      findings.push(finding({
+        code: "semantic_coverage_incomplete",
+        category: "evidence",
+        severity: "error",
+        path: `/evidence/${stage}/coverage/semanticSourceCount`,
+        message: `${stage} Code Facts do not semantically cover every compiled source file.`,
+        actual: facts.coverage ?? null
       }));
     }
   }
@@ -757,6 +874,7 @@ export function auditPlanAgainstCodeFacts(approvedPlan, currentFacts, implemente
   }
 
   for (const record of allChanged(diff.includeEdges)) {
+    if (includeRecordMatchesPlan(record, approvedPlan.modules)) continue;
     findings.push(finding({
       code: "unapproved_include_dependency_change",
       category: "unapproved",
@@ -788,7 +906,8 @@ export function auditPlanAgainstCodeFacts(approvedPlan, currentFacts, implemente
     reviewId: approvedPlan.id,
     generatedAt: now().toISOString(),
     status: determineAuditStatus(orderedFindings),
-    approvedDigest: hash(approvedPlan),
+    approvedDigest: snapshot?.planDigest ?? hash(approvedPlan),
+    approvedRevision: snapshot?.revision ?? null,
     currentFactsDigest: diff.currentDigest,
     implementedFactsDigest: diff.implementedDigest,
     summary: summarizeAudit(plannedChanges, orderedFindings),

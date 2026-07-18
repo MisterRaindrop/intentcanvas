@@ -8,6 +8,7 @@ import {
   readCompileCommands
 } from "./compilation-database.js";
 import { ClangUmlError, parseClangUmlJson, readClangUmlJson } from "./clang-uml.js";
+import { discoverGitIdentity } from "./git-identity.js";
 import { compareText, findExecutable, pathForProject, toPosixPath } from "./path-utils.js";
 import {
   diagnostic,
@@ -17,6 +18,7 @@ import {
   hashFile,
   sourceFor
 } from "./source.js";
+import { inventorySourceFiles, SourceInventoryError } from "./source-inventory.js";
 
 export const CODE_FACTS_SCHEMA_VERSION = "1.0.0";
 export const CODE_FACTS_KIND = "IntentCanvasCodeFacts";
@@ -92,13 +94,13 @@ function ensureLocationFiles(target, root, clangSource) {
   }
 }
 
-async function addCompileFileFingerprints(target, absoluteFiles) {
+async function addCompileFileFingerprints(target, absoluteFiles, projectRoot) {
   for (const [factPath, absolutePath] of [...absoluteFiles].sort(([left], [right]) =>
     compareText(left, right))) {
     const file = target.files.get(factPath);
     if (file === undefined || file.fingerprint !== undefined) continue;
     try {
-      file.fingerprint = await hashFile(absolutePath);
+      file.fingerprint = await hashFile(absolutePath, { projectRoot });
     } catch (error) {
       target.diagnostics.push(diagnostic("warning", "source_file_unreadable",
         `The compilation database source file could not be read: ${error.message}`, {
@@ -139,6 +141,9 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
   let compilationLoaded = false;
   let clangLoaded = false;
   let clangSource;
+  const compiledSourcePaths = new Set();
+  let inventoryComplete = false;
+  let inventoryFileCount = 0;
 
   try {
     buildSystems = await discoverBuildSystems(root, {
@@ -173,6 +178,7 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
       const absoluteFiles = new Map();
       for (const command of commands) {
         const file = fileFromCommand(command, root, databaseSource);
+        compiledSourcePaths.add(file.path);
         absoluteFiles.set(file.path, command.file);
         if (!target.files.has(file.path)) target.files.set(file.path, file);
         if (command.responseFiles.length > 0) {
@@ -183,7 +189,7 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
             }));
         }
       }
-      await addCompileFileFingerprints(target, absoluteFiles);
+      await addCompileFileFingerprints(target, absoluteFiles, root);
     }
   } catch (error) {
     const code = error instanceof CompilationDatabaseError ? error.code : "compile_commands_failed";
@@ -237,7 +243,71 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
     }
   }
 
+  try {
+    const inventory = await inventorySourceFiles(root, {
+      ...(options.sourceInventoryMaxFiles === undefined
+        ? {} : { maxFiles: options.sourceInventoryMaxFiles }),
+      ...(options.sourceInventoryMaxEntries === undefined
+        ? {} : { maxEntries: options.sourceInventoryMaxEntries }),
+      ...(options.sourceInventoryMaxDepth === undefined
+        ? {} : { maxDepth: options.sourceInventoryMaxDepth })
+    });
+    inventoryComplete = inventory.complete;
+    inventoryFileCount = inventory.files.length;
+    for (const file of inventory.files) {
+      const current = target.files.get(file.path);
+      target.files.set(file.path, current === undefined ? file : {
+        ...file,
+        ...current,
+        fingerprint: current.fingerprint ?? file.fingerprint
+      });
+    }
+    for (const item of inventory.diagnostics) {
+      target.diagnostics.push(diagnostic(
+        "warning",
+        item.code,
+        item.message,
+        item.file === undefined ? {} : { file: item.file }
+      ));
+    }
+  } catch (error) {
+    const code = error instanceof SourceInventoryError
+      ? error.code
+      : "source_inventory_failed";
+    target.diagnostics.push(diagnostic(
+      "error",
+      code,
+      `Source inventory failed: ${error.message}`
+    ));
+  }
+
   ensureLocationFiles(target, root, clangSource);
+
+  const semanticSourcePaths = new Set(
+    [...target.symbols.values()]
+      .map((symbol) => symbol.file)
+      .filter((path) => compiledSourcePaths.has(path))
+  );
+  const coverage = {
+    sourceInventoryComplete: inventoryComplete,
+    semanticInventoryComplete: options.semanticInventoryComplete === true,
+    inventoryFileCount,
+    compiledSourceCount: compiledSourcePaths.size,
+    semanticSourceCount: semanticSourcePaths.size
+  };
+  const highConfidence = compilationLoaded && clangLoaded && inventoryComplete &&
+    coverage.semanticInventoryComplete &&
+    compiledSourcePaths.size > 0 && semanticSourcePaths.size === compiledSourcePaths.size;
+  const discoveredIdentity = await discoverGitIdentity(root, {
+    ...(options.execFileImpl === undefined ? {} : { execFileImpl: options.execFileImpl })
+  });
+  const projectIdentity = {
+    ...discoveredIdentity,
+    ...(options.projectRepository === undefined
+      ? {} : { repository: options.projectRepository }),
+    ...(options.projectBaseRef === undefined
+      ? {} : { baseRef: options.projectBaseRef })
+  };
 
   const facts = {
     schemaVersion: CODE_FACTS_SCHEMA_VERSION,
@@ -245,6 +315,7 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
     project: {
       root: toPosixPath(root),
       name: basename(root),
+      ...projectIdentity,
       buildSystems: buildSystems.map(({ type, path }) => ({ type, path })),
       ...(compilationDatabase === null
         ? {}
@@ -258,7 +329,8 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
     includeEdges: [...target.includeEdges.values()].sort(compareEdges),
     callEdges: [...target.callEdges.values()].sort(compareEdges),
     diagnostics: target.diagnostics.sort(compareDiagnostics),
-    confidence: compilationLoaded && clangLoaded ? "high" :
+    coverage,
+    confidence: highConfidence ? "high" :
       compilationLoaded || clangLoaded ? "medium" : "low",
     source: extractorSource()
   };

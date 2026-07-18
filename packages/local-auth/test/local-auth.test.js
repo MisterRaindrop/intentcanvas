@@ -16,12 +16,56 @@ import test from "node:test";
 
 import {
   bearerAuthorization,
+  createRuntimeIdentityChallenge,
   generateAuthToken,
   loadOrCreateAuthToken,
   readAuthToken,
+  readWorkspaceBinding,
+  removeWorkspaceBinding,
   resolveAuthTokenFile,
-  validateAuthToken
+  runtimeIdentityProof,
+  validateAuthToken,
+  verifyRuntimeIdentityProof,
+  writeWorkspaceBinding
 } from "../src/index.js";
+
+test("creates and verifies a challenge-bound Runtime identity proof", () => {
+  const token = generateAuthToken(() => Buffer.alloc(32, 1));
+  const challenge = createRuntimeIdentityChallenge(() => Buffer.alloc(32, 2));
+  const proof = runtimeIdentityProof(token, challenge);
+
+  assert.equal(verifyRuntimeIdentityProof(token, challenge, proof), true);
+  assert.equal(verifyRuntimeIdentityProof(token, "C".repeat(43), proof), false);
+  assert.equal(verifyRuntimeIdentityProof("D".repeat(43), challenge, proof), false);
+});
+
+test("stores a private workspace-to-review binding without touching the repository", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "intentcanvas-binding-home-"));
+  const workspace = await mkdtemp(join(tmpdir(), "intentcanvas-binding-workspace-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+
+  const written = await writeWorkspaceBinding({
+    cwd: workspace,
+    reviewId: "review-1",
+    runtimeUrl: "http://127.0.0.1:4317/"
+  }, { home });
+  assert.equal(written.reviewId, "review-1");
+  assert.equal(written.runtimeUrl, "http://127.0.0.1:4317");
+  assert.deepEqual(await readWorkspaceBinding(workspace, { home }), written);
+  assert.equal(await readWorkspaceBinding(home, { home }), null);
+  await assert.rejects(
+    writeWorkspaceBinding({
+      cwd: workspace,
+      reviewId: "review-1",
+      runtimeUrl: "https://untrusted.example"
+    }, { home }),
+    (error) => error.code === "invalid_workspace_runtime_url"
+  );
+  assert.deepEqual(await removeWorkspaceBinding(workspace, { home }), written);
+  assert.equal(await readWorkspaceBinding(workspace, { home }), null);
+  assert.equal(await removeWorkspaceBinding(workspace, { home }), null);
+});
 
 test("creates and reuses a private per-user token", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "intentcanvas-auth-"));

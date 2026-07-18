@@ -7,7 +7,9 @@ import { pathToFileURL } from "node:url";
 
 import {
   bearerAuthorization,
-  readAuthToken
+  createRuntimeIdentityChallenge,
+  readAuthToken,
+  verifyRuntimeIdentityProof
 } from "../packages/local-auth/src/index.js";
 
 export const DEFAULT_RUNTIME_URL = "http://127.0.0.1:4317/api/events";
@@ -196,12 +198,71 @@ export function resolveEventEndpoint(value) {
   return endpoint;
 }
 
+export async function verifyEventEndpointIdentity(endpoint, authToken, {
+  timeout = DEFAULT_TIMEOUT_MS,
+  transport = endpoint?.protocol === "https:" ? https : http,
+  randomBytesImpl
+} = {}) {
+  if (!endpoint || !["http:", "https:"].includes(endpoint.protocol)) return false;
+  const challenge = createRuntimeIdentityChallenge(randomBytesImpl);
+  const identityUrl = new URL("/api/identity", endpoint.origin);
+  identityUrl.searchParams.set("challenge", challenge);
+
+  return new Promise((resolveIdentity) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolveIdentity(value);
+    };
+    const request = transport.request(identityUrl, {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        "user-agent": "intentcanvas-claude-hook/0.2"
+      }
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 4096) {
+          request.destroy();
+          finish(false);
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.once("end", () => {
+        if (response.statusCode !== 200) return finish(false);
+        try {
+          const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          finish(payload?.service === "intentcanvas-runtime" &&
+            payload?.challenge === challenge &&
+            verifyRuntimeIdentityProof(authToken, challenge, payload?.proof));
+        } catch {
+          finish(false);
+        }
+      });
+      response.once("error", () => finish(false));
+    });
+    request.setTimeout(timeout, () => {
+      request.destroy();
+      finish(false);
+    });
+    request.once("error", () => finish(false));
+    request.end();
+  });
+}
+
 export async function postEvent(endpoint, event, {
   timeout = DEFAULT_TIMEOUT_MS,
   authToken,
-  transport = endpoint?.protocol === "https:" ? https : http
+  transport = endpoint?.protocol === "https:" ? https : http,
+  verifyIdentity = verifyEventEndpointIdentity
 } = {}) {
   if (!endpoint || !["http:", "https:"].includes(endpoint.protocol)) return;
+  if (!await verifyIdentity(endpoint, authToken, { timeout, transport })) return;
 
   const body = JSON.stringify(event);
 

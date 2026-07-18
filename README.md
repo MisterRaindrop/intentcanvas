@@ -11,12 +11,12 @@ It is aimed at changes that are hard to judge from prose alone: large C/C++ syst
 - A strict, versioned Plan Model and a Doris TDE example.
 - A visual Studio with a top-level module graph, one-line module summaries, simplified module diagrams, focused call paths, member changes, pseudocode, risks, and checks.
 - Previous/next module navigation, module-level approval, targeted feedback, and single-module replanning without regenerating the whole design.
-- A loopback-only Runtime with atomic persistent storage, revision history, event ingestion, and import/replace/module-revise APIs.
-- A terminal CLI that validates, imports, revises, and prints OSC8 clickable review links.
-- Deterministic C/C++ Code Facts ingestion from an existing `compile_commands.json` and clang-uml JSON, with provenance and confidence instead of guessed symbols.
-- Approved-versus-Implemented model and direct before/after Code Facts drift reports.
+- A loopback-only Runtime with atomic persistent storage, decision-inclusive revision history, event ingestion, an execution gate, and revision-bound Approved Snapshots.
+- A terminal CLI that validates, imports, gets, replaces, revises, checks/finalizes approval, and prints OSC8 clickable review links.
+- Deterministic C/C++ Code Facts ingestion from an existing `compile_commands.json` and clang-uml JSON, plus a bounded full source inventory, Git identity, provenance, coverage, and honest implementation fingerprints.
+- Approved-Snapshot-versus-Implemented model and direct before/after Code Facts drift reports, including project identity and concrete include authorization.
 - A safe SSH/tmux Bridge that creates a same-port loopback forward on the local client; the remote CLI prints the authenticated clickable URL.
-- Claude Code and Codex packaging through the shared `visual-plan` Skill, plus a fail-open, allowlisted lifecycle Hook.
+- Claude Code and Codex packaging through the shared `visual-plan` Skill, plus a synchronous fail-closed write gate for bound reviews and separate fail-open lifecycle telemetry.
 
 The governing rule is:
 
@@ -40,7 +40,7 @@ pnpm dev
 
 The Runtime prints `Open visual plan` as a clickable terminal link. In iTerm2 and other OSC8-capable terminals, click it directly. Each link contains a random handoff that expires after 60 seconds and works once; run `pnpm intentcanvas plan open doris-tde-demo` whenever you need a fresh link. A bare `?review=...` URL deliberately cannot open a new browser session.
 
-State is stored atomically under `.intentcanvas/runtime/state.json`; restarting the Runtime keeps plans, approvals, revisions, and events. One process owns a data directory at a time, and each review retains at most 100 structural snapshots.
+State is stored atomically under `.intentcanvas/runtime/state.json`; restarting the Runtime keeps plans, approvals, decision revisions, and events. Decision and structure updates carry revision preconditions, so a concurrent review mutation between client preflight and commit is rejected. One process owns a data directory at a time, and each review retains at most 100 snapshots.
 
 ## Use it for a real change
 
@@ -59,17 +59,26 @@ pnpm intentcanvas plan revise <review-id> <module-id> ./module.json
 
 That module returns to `pending`; approvals for untouched modules remain valid. Broader relationship or risk changes still require whole-plan replanning.
 
-After approval, implementation is limited to the frozen approved scope. The strongest acceptance path compares the approved plan against Code Facts extracted before and after implementation:
+The v0.2 mechanical gate requires every module to be approved before product-code writes. Check and freeze the exact approved Runtime revision:
 
 ```bash
-pnpm facts-diff ./approved-plan.json ./current-facts.json ./implemented-facts.json --markdown
+pnpm intentcanvas plan gate <review-id>
+pnpm intentcanvas plan freeze <review-id> ./approved-snapshot.json
+```
+
+If you explicitly abandon the visual workflow, `pnpm intentcanvas plan detach` removes only the current workspace's private gate binding; it does not rewrite code or approval history.
+
+The strongest acceptance path compares that revision-bound snapshot against Code Facts extracted before and after implementation:
+
+```bash
+pnpm facts-diff ./approved-snapshot.json ./current-facts.json ./implemented-facts.json --markdown
 ```
 
 You can also validate and compare a fact-derived Implemented Model:
 
 ```bash
 pnpm intentcanvas plan validate ./implemented.json
-pnpm diff ./approved-plan.json ./implemented.json --markdown
+pnpm diff ./approved-snapshot.json ./implemented.json --markdown
 ```
 
 Exit code `0` means the structural contract matches. Exit code `3` means missing or unapproved drift needs human review; it is not silently accepted.
@@ -81,13 +90,13 @@ IntentCanvas does not parse source by impression. Its first extractor consumes e
 ```bash
 pnpm facts extract /path/to/project \
   --compile-commands /path/to/project/build/compile_commands.json \
-  --clang-uml /path/to/clang-uml.json \
+  --clang-uml /path/to/project/build/clang-uml.json \
   --output /tmp/code-facts.json
 
 pnpm facts inspect /tmp/code-facts.json
 ```
 
-The output contains files, symbols, includes, calls, diagnostics, source provenance, confidence, and stable fingerprints. If an artifact is missing, the extractor records that limitation and leaves the unsupported facts empty; it does not invent them.
+The output contains the full in-scope C/C++ file inventory, compilation coverage, Git repository/base revision, symbols, includes, calls, diagnostics, provenance, declaration fingerprints, and implementation fingerprints only when an analysis artifact actually supplies a body. New source files are therefore visible even before they enter `compile_commands.json`. clang-uml alone does not attest that every symbol/body was emitted, so it remains medium confidence; missing or partial evidence cannot produce a false pass.
 
 Generating `compile_commands.json` and invoking clang-uml remain explicit project-specific steps in v0.2 because build commands can change a checkout. The Skill must obtain permission before running them.
 
@@ -141,10 +150,10 @@ pnpm check
 ## Security posture
 
 - Runtime binds only to `127.0.0.1`, validates loopback Host/Origin values, requires JSON mutation bodies, limits payload size, blocks static path/symlink escapes, and serves Studio with restrictive browser headers.
-- A private per-user token authenticates CLI and Hook calls but never appears in a URL. A 60-second one-use handoff becomes an origin-scoped browser session that can read and decide only its bound review; it cannot import, rewrite, emit events, or mint more links.
+- A private per-user token authenticates CLI and Hook calls but never appears in a URL. Before sending it, clients require a fresh challenge/HMAC identity proof from the loopback Runtime. A 60-second one-use handoff becomes an origin-scoped browser session that can read and decide only its bound review; it cannot import, rewrite, emit events, or mint more links.
 - Persistent writes use a synced temporary file plus atomic rename, a single-owner data-directory lock, bounded revisions, and fail-closed corrupt/stale-state handling.
 - Bridge never constructs a shell command and never exposes Runtime on a non-loopback interface.
-- Hook payloads contain only allowlisted structural metadata and may post only to a loopback Runtime endpoint.
+- Import/open binds the current workspace to one review outside the repository. Claude Code's synchronous PreToolUse Hook blocks write-capable tools until that review is fully approved; Runtime failure and identity mismatch fail closed. Separate lifecycle telemetry is allowlisted, asynchronous, and fail open.
 - Approval comes from Runtime state, never from assistant prose or Hook telemetry. This is an accidental-cross-action boundary, not isolation from a malicious same-user agent: Claude/Codex, CLI, Hook, and Runtime normally share one OS account, so that agent can read the same local token. A future desktop host or user-presence signature is required for a cryptographically independent human-approval boundary.
 
 ## License

@@ -40,10 +40,14 @@ async function startManagedRuntime(t, options = {}) {
   return runtime;
 }
 
-async function jsonRequest(url, method, body) {
+async function jsonRequest(url, method, body, expectedRevision) {
   const response = await fetch(url, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(expectedRevision === undefined
+        ? {} : { "If-Match": `"${expectedRevision}"` })
+    },
     body: JSON.stringify(body)
   });
   return { response, body: await response.json() };
@@ -65,22 +69,32 @@ test("review import, replacement, module patch, and revision history form a comp
   const replacement = structuredClone(imported);
   replacement.title = "Real repository plan v2";
   replacement.summary = "The complete plan was regenerated from current code facts.";
-  const replaced = await jsonRequest(
+  const missingPrecondition = await jsonRequest(
     `${runtime.baseUrl}/api/reviews/real-plan`,
     "PUT",
     replacement
+  );
+  assert.equal(missingPrecondition.response.status, 428);
+  assert.equal(missingPrecondition.body.error.code, "revision_precondition_required");
+  const replaced = await jsonRequest(
+    `${runtime.baseUrl}/api/reviews/real-plan`,
+    "PUT",
+    replacement,
+    1
   );
   assert.equal(replaced.response.status, 200);
   assert.equal(replaced.body.review.title, "Real repository plan v2");
   assert.equal(replaced.body.revision, 2);
 
+  let expectedRevision = 2;
   for (const moduleId of ["key-management", "write-path"]) {
     const approved = await jsonRequest(
       `${runtime.baseUrl}/api/reviews/real-plan/modules/${moduleId}/approval`,
       "POST",
-      { decision: "approved", comment: "reviewed", expectedRevision: 2 }
+      { decision: "approved", comment: "reviewed", expectedRevision }
     );
     assert.equal(approved.response.status, 200);
+    expectedRevision = approved.body.revision;
   }
 
   const beforePatch = await (
@@ -92,15 +106,25 @@ test("review import, replacement, module patch, and revision history form a comp
   replacementModule.summary = "Regenerated key-management implementation detail.";
   assert.equal(replacementModule.approval.decision, "approved");
 
+  const stalePatch = await jsonRequest(
+    `${runtime.baseUrl}/api/reviews/real-plan/modules/key-management`,
+    "PATCH",
+    replacementModule,
+    2
+  );
+  assert.equal(stalePatch.response.status, 409);
+  assert.equal(stalePatch.body.error.code, "stale_review_revision");
+
   const patched = await jsonRequest(
     `${runtime.baseUrl}/api/reviews/real-plan/modules/key-management`,
     "PATCH",
-    replacementModule
+    replacementModule,
+    expectedRevision
   );
   assert.equal(patched.response.status, 200);
   assert.equal(patched.body.module.summary, replacementModule.summary);
   assert.equal(patched.body.module.approval.decision, "pending");
-  assert.equal(patched.body.revision, 3);
+  assert.equal(patched.body.revision, 5);
 
   const afterPatch = await (
     await fetch(`${runtime.baseUrl}/api/reviews/real-plan`)
@@ -118,10 +142,10 @@ test("review import, replacement, module patch, and revision history form a comp
     `${runtime.baseUrl}/api/reviews/real-plan/revisions`
   );
   const history = await historyResponse.json();
-  assert.equal(history.currentRevision, 3);
+  assert.equal(history.currentRevision, 5);
   assert.deepEqual(
     history.revisions.map((revision) => revision.operation),
-    ["created", "replaced", "module_replaced"]
+    ["created", "replaced", "decision_updated", "decision_updated", "module_replaced"]
   );
 
   const secondRevision = await (
@@ -133,7 +157,8 @@ test("review import, replacement, module patch, and revision history form a comp
   const invalidPatch = await jsonRequest(
     `${runtime.baseUrl}/api/reviews/real-plan/modules/key-management`,
     "PATCH",
-    { id: "key-management", summary: "not a complete module" }
+    { id: "key-management", summary: "not a complete module" },
+    5
   );
   assert.equal(invalidPatch.response.status, 400);
   assert.equal(invalidPatch.body.error.code, "invalid_module");
@@ -164,7 +189,8 @@ test("API resets client-supplied approval and rejects stale review decisions", a
   const changed = await jsonRequest(
     `${runtime.baseUrl}/api/reviews/approval-gate/modules/${changedModule.id}`,
     "PATCH",
-    changedModule
+    changedModule,
+    1
   );
   assert.equal(changed.body.revision, 2);
 
@@ -205,7 +231,8 @@ test("plans, approvals, revisions, and events recover after restart", async (t) 
     (await jsonRequest(
       `${first.baseUrl}/api/reviews/doris-tde-demo`,
       "PUT",
-      plan
+      plan,
+      1
     )).response.status,
     200
   );
@@ -248,7 +275,7 @@ test("plans, approvals, revisions, and events recover after restart", async (t) 
   const history = await (
     await fetch(`${second.baseUrl}/api/reviews/doris-tde-demo/revisions`)
   ).json();
-  assert.equal(history.currentRevision, 2);
+  assert.equal(history.currentRevision, 3);
 });
 
 test("corrupt state produces a diagnostic and is never overwritten", async (t) => {

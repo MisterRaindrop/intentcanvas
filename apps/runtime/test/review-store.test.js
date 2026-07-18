@@ -47,7 +47,7 @@ test("ReviewStore owns approval state on import and whole-plan replacement", () 
   assert.ok(replaced.review.modules.every((module) => module.approval.decision === "pending"));
 });
 
-test("ReviewStore rejects a decision made against a stale structural revision", () => {
+test("ReviewStore rejects a decision made against a stale review revision", () => {
   const store = new ReviewStore([createTdePlanFixture()]);
   const module = store.getReview("doris-tde-demo").modules[0];
   module.summary = "New detail the reviewer has not seen";
@@ -85,12 +85,56 @@ test("ReviewStore updates module and aggregate approval state", () => {
   );
 
   assert.equal(result.reviewStatus, "changes_requested");
+  assert.equal(result.revision, 2);
+  assert.equal(result.revisionInfo.operation, "decision_updated");
   assert.equal(result.approval.updatedAt, "2026-07-17T01:02:03.000Z");
   assert.equal(
     store.getReview("doris-tde-demo").modules.find((module) => module.id === "write-path")
       .approval.comment,
     "密钥边界需要调整"
   );
+});
+
+test("ReviewStore rejects replayed decisions and exposes a fail-closed execution gate", () => {
+  const store = new ReviewStore([createTdePlanFixture()]);
+  const rejected = store.submitDecision("doris-tde-demo", {
+    moduleId: "write-path",
+    decision: "changes_requested",
+    comment: "先调整密钥边界",
+    expectedRevision: 1
+  });
+  assert.equal(rejected.revision, 2);
+  assert.throws(
+    () => store.submitDecision("doris-tde-demo", {
+      moduleId: "write-path",
+      decision: "approved",
+      comment: "旧页面重放",
+      expectedRevision: 1
+    }),
+    (error) => error instanceof ReviewStoreError &&
+      error.code === "stale_review_revision" && error.status === 409
+  );
+  assert.equal(store.getExecutionGate("doris-tde-demo").allowed, false);
+
+  const revised = store.getReview("doris-tde-demo").modules
+    .find((module) => module.id === "write-path");
+  revised.summary = "密钥边界已经按意见调整";
+  const replacement = store.replaceModule("doris-tde-demo", revised.id, revised);
+  let revision = replacement.revision;
+  for (const module of store.getReview("doris-tde-demo").modules) {
+    revision = store.submitDecision("doris-tde-demo", {
+      moduleId: module.id,
+      decision: "approved",
+      expectedRevision: revision
+    }).revision;
+  }
+  const gate = store.getExecutionGate("doris-tde-demo");
+  assert.equal(gate.allowed, true);
+  assert.equal(gate.revision, revision);
+  const snapshot = store.getApprovedSnapshot("doris-tde-demo");
+  assert.equal(snapshot.plan.status, "approved");
+  assert.equal(snapshot.revision, revision);
+  assert.match(snapshot.planDigest, /^sha256:[a-f0-9]{64}$/u);
 });
 
 test("ReviewStore reports unknown reviews and modules", () => {
@@ -173,7 +217,7 @@ test("ReviewStore records complete-plan and module revisions without resetting u
   });
   assert.equal(second.revision, 2);
 
-  store.submitDecision(
+  const firstDecision = store.submitDecision(
     "revision-test",
     {
       moduleId: "key-management",
@@ -183,16 +227,18 @@ test("ReviewStore records complete-plan and module revisions without resetting u
     },
     { now: () => new Date("2026-07-17T02:10:00.000Z") }
   );
-  store.submitDecision(
+  assert.equal(firstDecision.revision, 3);
+  const secondDecision = store.submitDecision(
     "revision-test",
     {
       moduleId: "write-path",
       decision: "approved",
       comment: "preserve this",
-      expectedRevision: 2
+      expectedRevision: 3
     },
     { now: () => new Date("2026-07-17T02:11:00.000Z") }
   );
+  assert.equal(secondDecision.revision, 4);
 
   const module = store.getReview("revision-test").modules[0];
   module.summary = "Only this complete module changed.";
@@ -200,7 +246,7 @@ test("ReviewStore records complete-plan and module revisions without resetting u
     now: () => new Date("2026-07-17T03:00:00.000Z")
   });
 
-  assert.equal(third.revision, 3);
+  assert.equal(third.revision, 5);
   assert.equal(third.module.approval.decision, "pending");
   assert.equal(
     store.getReview("revision-test").modules.find((item) => item.id === "write-path")
@@ -209,7 +255,7 @@ test("ReviewStore records complete-plan and module revisions without resetting u
   );
   assert.deepEqual(
     store.listRevisions("revision-test").map((revision) => revision.operation),
-    ["created", "replaced", "module_replaced"]
+    ["created", "replaced", "decision_updated", "decision_updated", "module_replaced"]
   );
   assert.equal(store.getRevision("revision-test", 2).plan.title, "Complete replacement");
 });
@@ -233,7 +279,7 @@ test("ReviewStore state snapshots restore reviews, revision history, and events"
   const recovered = ReviewStore.fromState(store.exportState());
   assert.equal(recovered.size, 1);
   assert.equal(recovered.eventCount, 1);
-  assert.equal(recovered.getCurrentRevision("doris-tde-demo"), 1);
+  assert.equal(recovered.getCurrentRevision("doris-tde-demo"), 2);
   assert.equal(
     recovered.getReview("doris-tde-demo").modules.find((module) => module.id === "write-path")
       .approval.decision,

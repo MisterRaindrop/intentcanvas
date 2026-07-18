@@ -143,6 +143,25 @@ async function readJson(request) {
   }
 }
 
+function requiredExpectedRevision(request) {
+  const value = request.headers["if-match"];
+  const match = typeof value === "string" ? /^"(\d+)"$/u.exec(value) : null;
+  if (match === null) {
+    throw new ReviewStoreError("Structural review updates require an If-Match revision", {
+      code: "revision_precondition_required",
+      status: 428
+    });
+  }
+  const revision = Number(match[1]);
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new ReviewStoreError("If-Match revision must be a positive integer", {
+      code: "invalid_revision_precondition",
+      status: 400
+    });
+  }
+  return revision;
+}
+
 function assertLocalRequest(request) {
   const authorityValue = request.headers.host;
   if (typeof authorityValue !== "string" || authorityValue.length === 0) {
@@ -396,6 +415,39 @@ export function createRequestHandler({
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/api/identity") {
+        if (!authManager || authManager === false ||
+            typeof authManager.proveIdentity !== "function") {
+          throw new ReviewStoreError("Runtime identity proof is not configured", {
+            code: "runtime_auth_unavailable",
+            status: 503
+          });
+        }
+        const challenge = url.searchParams.get("challenge");
+        if (url.searchParams.size !== 1 || typeof challenge !== "string") {
+          throw new ReviewStoreError("A single Runtime identity challenge is required", {
+            code: "invalid_runtime_identity_challenge",
+            status: 400
+          });
+        }
+        let proof;
+        try {
+          proof = authManager.proveIdentity(challenge);
+        } catch {
+          throw new ReviewStoreError("Runtime identity challenge is invalid", {
+            code: "invalid_runtime_identity_challenge",
+            status: 400
+          });
+        }
+        sendJson(response, 200, {
+          service: "intentcanvas-runtime",
+          version: RUNTIME_VERSION,
+          challenge,
+          proof
+        });
+        return;
+      }
+
       if (isApi) {
         const principal = assertApiAuthorization(request, authManager);
         assertBrowserSessionScope(request, segments, principal);
@@ -461,9 +513,13 @@ export function createRequestHandler({
 
       if (request.method === "PUT" && segments.length === 3 &&
           segments[0] === "api" && segments[1] === "reviews") {
+        const expectedRevision = requiredExpectedRevision(request);
         const plan = await readJson(request);
         const result = await writer.mutate(
-          (candidate) => candidate.replaceReview(segments[2], plan, { now })
+          (candidate) => candidate.replaceReview(segments[2], plan, {
+            now,
+            expectedRevision
+          })
         );
         sendJson(response, 200, result, {
           headers: { "X-IntentCanvas-Revision": String(result.revision) }
@@ -474,17 +530,35 @@ export function createRequestHandler({
       if (request.method === "PATCH" && segments.length === 5 &&
           segments[0] === "api" && segments[1] === "reviews" &&
           segments[3] === "modules") {
+        const expectedRevision = requiredExpectedRevision(request);
         const module = await readJson(request);
         const result = await writer.mutate(
           (candidate) => candidate.replaceModule(
             segments[2],
             segments[4],
             module,
-            { now }
+            { now, expectedRevision }
           )
         );
         sendJson(response, 200, result, {
           headers: { "X-IntentCanvas-Revision": String(result.revision) }
+        });
+        return;
+      }
+
+      if (request.method === "GET" && segments.length === 4 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          segments[3] === "gate") {
+        sendJson(response, 200, store.getExecutionGate(segments[2]));
+        return;
+      }
+
+      if (request.method === "GET" && segments.length === 4 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          segments[3] === "approved") {
+        const snapshot = store.getApprovedSnapshot(segments[2]);
+        sendJson(response, 200, snapshot, {
+          headers: { "X-IntentCanvas-Revision": String(snapshot.revision) }
         });
         return;
       }

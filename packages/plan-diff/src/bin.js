@@ -9,7 +9,7 @@ const markdown = args.includes("--markdown");
 const files = args.filter((arg) => arg !== "--markdown");
 
 if (files.length !== 2) {
-  console.error("Usage: intentcanvas-diff <approved-plan.json> <implemented-model.json> [--markdown]");
+  console.error("Usage: intentcanvas-diff <approved-snapshot.json> <implemented-model.json> [--markdown]");
   process.exitCode = 2;
 } else {
   try {

@@ -1,8 +1,12 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+
+import { LocalAuthError } from "./errors.js";
+
+export { LocalAuthError } from "./errors.js";
 
 export const AUTH_TOKEN_ENV = "INTENTCANVAS_AUTH_TOKEN";
 export const AUTH_TOKEN_FILE_ENV = "INTENTCANVAS_AUTH_TOKEN_FILE";
@@ -10,16 +14,10 @@ export const DEFAULT_AUTH_DIRECTORY = ".intentcanvas";
 export const DEFAULT_AUTH_TOKEN_FILE = "auth-token";
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43,128}$/u;
+const IDENTITY_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const IDENTITY_PROOF_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const RUNTIME_IDENTITY_CONTEXT = "intentcanvas-runtime-identity-v1\0";
 const MAX_TOKEN_FILE_BYTES = 1024;
-
-export class LocalAuthError extends Error {
-  constructor(code, message, { path, cause } = {}) {
-    super(message, { cause });
-    this.name = "LocalAuthError";
-    this.code = code;
-    if (path !== undefined) this.path = path;
-  }
-}
 
 export function validateAuthToken(value) {
   if (typeof value !== "string" || !TOKEN_PATTERN.test(value)) {
@@ -33,6 +31,43 @@ export function validateAuthToken(value) {
 
 export function generateAuthToken(randomBytesImpl = randomBytes) {
   return validateAuthToken(randomBytesImpl(32).toString("base64url"));
+}
+
+export function createRuntimeIdentityChallenge(randomBytesImpl = randomBytes) {
+  const challenge = randomBytesImpl(32).toString("base64url");
+  if (!IDENTITY_CHALLENGE_PATTERN.test(challenge)) {
+    throw new LocalAuthError(
+      "invalid_runtime_identity_challenge",
+      "IntentCanvas Runtime identity challenge must be 32 random bytes"
+    );
+  }
+  return challenge;
+}
+
+export function runtimeIdentityProof(token, challenge) {
+  validateAuthToken(token);
+  if (typeof challenge !== "string" || !IDENTITY_CHALLENGE_PATTERN.test(challenge)) {
+    throw new LocalAuthError(
+      "invalid_runtime_identity_challenge",
+      "IntentCanvas Runtime identity challenge is invalid"
+    );
+  }
+  return createHmac("sha256", token)
+    .update(`${RUNTIME_IDENTITY_CONTEXT}${challenge}`, "utf8")
+    .digest("base64url");
+}
+
+export function verifyRuntimeIdentityProof(token, challenge, proof) {
+  let expected;
+  try {
+    expected = runtimeIdentityProof(token, challenge);
+  } catch {
+    return false;
+  }
+  if (typeof proof !== "string" || !IDENTITY_PROOF_PATTERN.test(proof)) return false;
+  const expectedBytes = Buffer.from(expected, "utf8");
+  const proofBytes = Buffer.from(proof, "utf8");
+  return expectedBytes.length === proofBytes.length && timingSafeEqual(expectedBytes, proofBytes);
 }
 
 export function resolveAuthTokenFile({
@@ -232,3 +267,12 @@ export async function loadOrCreateAuthToken(options = {}) {
 export function bearerAuthorization(token) {
   return `Bearer ${validateAuthToken(token)}`;
 }
+
+export {
+  DEFAULT_WORKSPACE_BINDING_DIRECTORY,
+  WORKSPACE_BINDING_VERSION,
+  normalizeBoundRuntimeUrl,
+  readWorkspaceBinding,
+  removeWorkspaceBinding,
+  writeWorkspaceBinding
+} from "./workspace-binding.js";

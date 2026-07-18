@@ -65,6 +65,14 @@ function requirePositiveInteger(value, path, errors) {
   return true;
 }
 
+function requireNonNegativeInteger(value, path, errors) {
+  if (!Number.isInteger(value) || value < 0) {
+    addError(errors, path, "must be a non-negative integer", "invalid_number");
+    return false;
+  }
+  return true;
+}
+
 function validateSource(source, path, errors) {
   if (!requireObject(source, path, errors)) return;
   requireString(source.tool, `${path}.tool`, errors);
@@ -128,6 +136,12 @@ function validateProject(project, errors) {
   if (!requireObject(project, "$.project", errors)) return;
   requireString(project.root, "$.project.root", errors);
   requireString(project.name, "$.project.name", errors);
+  if (project.repository !== undefined) {
+    requireString(project.repository, "$.project.repository", errors);
+  }
+  if (project.baseRef !== undefined) {
+    requireString(project.baseRef, "$.project.baseRef", errors);
+  }
 
   if (project.buildSystems !== undefined &&
       requireArray(project.buildSystems, "$.project.buildSystems", errors)) {
@@ -225,11 +239,63 @@ function validateSymbols(symbols, filePaths, symbolIds, errors) {
     if (symbol.fingerprint !== undefined) {
       validateFingerprint(symbol.fingerprint, `${path}.fingerprint`, errors);
     }
+    if (symbol.implementationFingerprint !== undefined) {
+      validateFingerprint(
+        symbol.implementationFingerprint,
+        `${path}.implementationFingerprint`,
+        errors
+      );
+    }
     if (symbol.location !== undefined) {
       validateLocation(symbol.location, `${path}.location`, errors, filePaths);
     }
     validateFactMetadata(symbol, path, errors);
   });
+}
+
+function validateCoverage(coverage, errors) {
+  if (!requireObject(coverage, "$.coverage", errors)) return;
+  if (typeof coverage.sourceInventoryComplete !== "boolean") {
+    addError(
+      errors,
+      "$.coverage.sourceInventoryComplete",
+      "must be a boolean",
+      "invalid_type"
+    );
+  }
+  if (typeof coverage.semanticInventoryComplete !== "boolean") {
+    addError(
+      errors,
+      "$.coverage.semanticInventoryComplete",
+      "must be a boolean",
+      "invalid_type"
+    );
+  }
+  requireNonNegativeInteger(
+    coverage.inventoryFileCount,
+    "$.coverage.inventoryFileCount",
+    errors
+  );
+  requireNonNegativeInteger(
+    coverage.compiledSourceCount,
+    "$.coverage.compiledSourceCount",
+    errors
+  );
+  requireNonNegativeInteger(
+    coverage.semanticSourceCount,
+    "$.coverage.semanticSourceCount",
+    errors
+  );
+  if (Number.isInteger(coverage.semanticSourceCount) &&
+      Number.isInteger(coverage.compiledSourceCount) &&
+      coverage.semanticSourceCount > coverage.compiledSourceCount) {
+    addError(
+      errors,
+      "$.coverage.semanticSourceCount",
+      "must not exceed compiledSourceCount",
+      "invalid_range"
+    );
+  }
 }
 
 function validateEdgeMetadata(edge, path, filePaths, errors) {
@@ -349,6 +415,7 @@ export function validateCodeFacts(facts) {
   validateEdges(facts.includeEdges, "$.includeEdges", filePaths, "file", filePaths, errors);
   validateEdges(facts.callEdges, "$.callEdges", symbolIds, "symbol", filePaths, errors);
   validateDiagnostics(facts.diagnostics, filePaths, errors);
+  if (facts.coverage !== undefined) validateCoverage(facts.coverage, errors);
   validateConfidence(facts.confidence, "$.confidence", errors);
   validateSource(facts.source, "$.source", errors);
 

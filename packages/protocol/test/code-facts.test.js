@@ -16,6 +16,8 @@ function codeFacts(overrides = {}) {
     project: {
       root: "/srv/example",
       name: "example",
+      repository: "https://example.invalid/example.git",
+      baseRef: "0123456789abcdef",
       buildSystems: [{ type: "cmake", path: "CMakeLists.txt" }],
       compileCommands: "build/compile_commands.json"
     },
@@ -47,6 +49,7 @@ function codeFacts(overrides = {}) {
         file: "src/main.cc",
         location: { line: 4, column: 1, endLine: 8, endColumn: 2 },
         fingerprint: `sha256:${"b".repeat(64)}`,
+        implementationFingerprint: `sha256:${"c".repeat(64)}`,
         confidence: "high",
         source: { tool: "clang-ast", version: "18.1.0" }
       },
@@ -88,6 +91,13 @@ function codeFacts(overrides = {}) {
         source: { tool: "@intentcanvas/code-facts" }
       }
     ],
+    coverage: {
+      sourceInventoryComplete: true,
+      semanticInventoryComplete: true,
+      inventoryFileCount: 2,
+      compiledSourceCount: 1,
+      semanticSourceCount: 1
+    },
     confidence: "medium",
     source: {
       tool: "@intentcanvas/code-facts",
@@ -126,6 +136,8 @@ test("validates source locations, confidence markers, and provenance", () => {
   facts.callEdges[0].location.file = "src/missing.cc";
   facts.source.tool = " ";
   facts.files[0].fingerprint = "sha256:not-a-digest";
+  facts.symbols[0].implementationFingerprint = "sha256:not-a-body-digest";
+  facts.coverage.semanticSourceCount = 2;
 
   const result = validateCodeFacts(facts);
 
@@ -135,6 +147,10 @@ test("validates source locations, confidence markers, and provenance", () => {
   assert.ok(result.errors.some((item) => item.path === "$.callEdges[0].location.file"));
   assert.ok(result.errors.some((item) => item.path === "$.source.tool"));
   assert.ok(result.errors.some((item) => item.path === "$.files[0].fingerprint"));
+  assert.ok(result.errors.some(
+    (item) => item.path === "$.symbols[0].implementationFingerprint"
+  ));
+  assert.ok(result.errors.some((item) => item.path === "$.coverage.semanticSourceCount"));
 });
 
 test("requires provenance and confidence on every fact", () => {

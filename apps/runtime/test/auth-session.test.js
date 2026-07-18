@@ -2,8 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { RuntimeAuthManager } from "../src/auth-session.js";
+import { verifyRuntimeIdentityProof } from "@intentcanvas/local-auth";
 
 const AUTH_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+test("proves Runtime identity without exposing the bearer token", () => {
+  const manager = new RuntimeAuthManager(AUTH_TOKEN);
+  const challenge = "C".repeat(43);
+  const proof = manager.proveIdentity(challenge);
+
+  assert.equal(verifyRuntimeIdentityProof(AUTH_TOKEN, challenge, proof), true);
+  assert.equal(proof.includes(AUTH_TOKEN), false);
+  assert.throws(() => manager.proveIdentity("short"));
+});
 
 test("exchanges a one-use short handoff for a review-scoped bearer session", () => {
   let current = Date.UTC(2026, 6, 17, 0, 0, 0);

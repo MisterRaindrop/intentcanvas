@@ -7,12 +7,12 @@ Completed in the current tree:
 - Versioned Plan Model and Code Facts contracts.
 - Visual overview, simplified module diagrams, focused call paths, member changes, pseudocode, risks, and verification commands.
 - Module approval, targeted feedback, previous/next navigation, and single-module replacement.
-- Loopback Runtime with atomic persistent storage and structural revision history.
-- CLI import/validate/open/revise flow with OSC8 links.
-- Read-only C/C++ build discovery, compilation database normalization, and clang-uml JSON ingestion.
-- Approved-versus-Implemented model diff and direct Current/Implemented Code Facts audits.
+- Loopback Runtime with atomic persistent storage, decision-inclusive revision history, an execution gate, and revision-bound Approved Snapshots.
+- CLI import/validate/get/replace/open/revise/gate/freeze flow with OSC8 links.
+- Read-only C/C++ build discovery, Git identity, bounded source inventory, compilation coverage, compilation database normalization, and clang-uml JSON ingestion.
+- Approved-Snapshot-versus-Implemented model diff and direct Current/Implemented Code Facts audits with project, body-evidence, and include-authorization checks.
 - One-use browser handoffs, review-scoped browser sessions, and safe same-port SSH forwarding for remote tmux workflows.
-- Shared Claude Code/Codex Skill and allowlisted fail-open Hook.
+- Shared Claude Code/Codex Skill, checkout-local Skill tools, synchronous fail-closed Claude write gate, and separate allowlisted fail-open telemetry.
 
 ## v0.3: automatic evidence preparation
 
@@ -21,6 +21,8 @@ Completed in the current tree:
 - Source-link navigation and fact confidence overlays in Studio.
 - Build/test/sanitizer/static-analysis evidence capture with bounded logs.
 - Plan/Actual acceptance view inside Studio.
+- AST-backed implementation fingerprints for C/C++ function bodies when clang-uml supplies declarations only.
+- Safe partial-module execution scopes with explicit file ownership; v0.2 intentionally gates on full-plan approval.
 
 ## v0.4: richer graph review
 

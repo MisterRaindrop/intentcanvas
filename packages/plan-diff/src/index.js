@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { assertPlanModel } from "@intentcanvas/protocol";
+import {
+  APPROVED_SNAPSHOT_KIND,
+  assertApprovedSnapshot,
+  assertPlanModel
+} from "@intentcanvas/protocol";
 
 export {
   CODE_FACTS_DIFF_KIND,
@@ -68,6 +72,7 @@ function changeShape(change) {
   return {
     status: change.status,
     location: change.location,
+    dependencies: change.dependencies ?? [],
     callPath: change.callPath.map((step) => ({
       label: step.label,
       status: step.status,
@@ -224,6 +229,15 @@ function relationshipKey(relationship) {
   return `${relationship.from}\u0000${relationship.to}\u0000${relationship.label}`;
 }
 
+function resolveApprovedPlan(input) {
+  if (input?.kind === APPROVED_SNAPSHOT_KIND) {
+    assertApprovedSnapshot(input);
+    return { plan: input.plan, snapshot: input };
+  }
+  assertPlanModel(input);
+  return { plan: input, snapshot: null };
+}
+
 function determineStatus(findings) {
   if (findings.length === 0) return "pass";
   const missing = findings.some((item) => [
@@ -238,10 +252,10 @@ function determineStatus(findings) {
   return unapproved ? "review_required" : missing ? "incomplete" : "review_required";
 }
 
-export function comparePlanModels(approvedPlan, implementedModel, {
+export function comparePlanModels(approvedInput, implementedModel, {
   now = () => new Date()
 } = {}) {
-  assertPlanModel(approvedPlan);
+  const { plan: approvedPlan, snapshot } = resolveApprovedPlan(approvedInput);
   assertPlanModel(implementedModel);
   if (approvedPlan.status !== "approved") {
     throw new TypeError("Approved Plan Model must have status approved");
@@ -257,6 +271,28 @@ export function comparePlanModels(approvedPlan, implementedModel, {
   const actualModules = mapBy(implementedModel.modules, (module) => module.id);
   const modules = [];
   const topLevelFindings = [];
+
+  if (implementedModel.status !== "implemented") {
+    topLevelFindings.push(finding(
+      "implemented_status_required",
+      "error",
+      "/status",
+      "Actual evidence must use status implemented; an approved plan is not implementation evidence",
+      "implemented",
+      implementedModel.status
+    ));
+  }
+  for (const field of ["name", "repository", "baseRef"]) {
+    if (approvedPlan.project[field] === implementedModel.project[field]) continue;
+    topLevelFindings.push(finding(
+      "project_identity_mismatch",
+      "error",
+      `/project/${field}`,
+      `Implemented Model project ${field} does not match the approved project`,
+      approvedPlan.project[field],
+      implementedModel.project[field]
+    ));
+  }
 
   for (const [moduleId, plannedModule] of plannedModules) {
     const actualModule = actualModules.get(moduleId);
@@ -333,7 +369,8 @@ export function comparePlanModels(approvedPlan, implementedModel, {
     reviewId: approvedPlan.id,
     generatedAt: now().toISOString(),
     status: determineStatus(findings),
-    approvedDigest: modelDigest(approvedPlan),
+    approvedDigest: snapshot?.planDigest ?? modelDigest(approvedPlan),
+    approvedRevision: snapshot?.revision ?? null,
     implementedDigest: modelDigest(implementedModel),
     summary: counts,
     modules,

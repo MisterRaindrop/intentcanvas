@@ -1,6 +1,21 @@
 {
-  "description": "Forward Claude Code lifecycle events to the local IntentCanvas runtime without blocking the session.",
+  "description": "Gate write-capable Claude Code tools on visual approval and forward allowlisted lifecycle telemetry asynchronously.",
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|Agent|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/pre-tool-gate.mjs"
+            ],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

@@ -11,6 +11,7 @@ import {
   resolveStudioDirectory,
   startRuntime
 } from "../src/server.js";
+import { verifyRuntimeIdentityProof } from "@intentcanvas/local-auth";
 
 const AUTH_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -85,6 +86,16 @@ test("runtime binds locally, exposes health and prints an OSC8 review link", asy
 
 test("runtime exchanges a one-use link for a browser session without exposing its bearer token", async (t) => {
   const runtime = await startTestRuntime(t, { authToken: AUTH_TOKEN });
+
+  const challenge = "C".repeat(43);
+  const identity = await (
+    await fetch(`${runtime.baseUrl}/api/identity?challenge=${challenge}`)
+  ).json();
+  assert.equal(identity.service, "intentcanvas-runtime");
+  assert.equal(identity.challenge, challenge);
+  assert.equal(verifyRuntimeIdentityProof(AUTH_TOKEN, challenge, identity.proof), true);
+  assert.doesNotMatch(JSON.stringify(identity), new RegExp(AUTH_TOKEN));
+  assert.equal((await fetch(`${runtime.baseUrl}/api/identity?challenge=short`)).status, 400);
 
   const publicStudio = await fetch(runtime.baseUrl);
   assert.equal(publicStudio.status, 200);
@@ -191,7 +202,9 @@ test("runtime reads the TDE review and accepts both approval endpoints", async (
     }
   );
   assert.equal(decisionResponse.status, 200);
-  assert.equal((await decisionResponse.json()).reviewStatus, "changes_requested");
+  const decisionResult = await decisionResponse.json();
+  assert.equal(decisionResult.reviewStatus, "changes_requested");
+  assert.equal(decisionResult.revision, 2);
 
   const moduleResponse = await fetch(
     `${runtime.baseUrl}/api/reviews/doris-tde-demo/modules/write-path/approval`,
@@ -200,14 +213,14 @@ test("runtime reads the TDE review and accepts both approval endpoints", async (
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         decision: "approved",
-        comment: "调整后批准",
+        comment: "旧页面不得覆盖调整意见",
         expectedRevision: 1
       })
     }
   );
   const moduleResult = await moduleResponse.json();
-  assert.equal(moduleResponse.status, 200);
-  assert.equal(moduleResult.approval.decision, "approved");
+  assert.equal(moduleResponse.status, 409);
+  assert.equal(moduleResult.error.code, "stale_review_revision");
 });
 
 test("runtime validates decisions, accepts hook events and serves Studio", async (t) => {

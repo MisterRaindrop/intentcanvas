@@ -1,4 +1,4 @@
 interface:
   display_name: "Visual Plan"
   short_description: "Approve, implement, and diff validated visual plans"
-  default_prompt: "Use $visual-plan to validate and import a code plan, wait for module approval, implement approved scope, and verify drift."
+  default_prompt: "Use $visual-plan to extract facts, import a visual code plan, wait for full module approval, freeze that Runtime revision, implement only the approved scope, and verify Actual drift."

@@ -48,8 +48,10 @@ const DIAGRAM_KEYS = Object.freeze(["nodes", "edges"]);
 const DIAGRAM_NODE_KEYS = Object.freeze(["id", "label", "type", "status", "description"]);
 const DIAGRAM_EDGE_KEYS = Object.freeze(["from", "to", "label", "status"]);
 const CHANGE_KEYS = Object.freeze([
-  "id", "title", "status", "location", "rationale", "callPath", "pseudocode"
+  "id", "title", "status", "location", "rationale", "callPath", "pseudocode",
+  "dependencies"
 ]);
+const DEPENDENCY_KEYS = Object.freeze(["kind", "from", "to", "status"]);
 const LOCATION_KEYS = Object.freeze(["file", "symbol"]);
 const CALL_PATH_STEP_KEYS = Object.freeze(["label", "status", "collapsedCount"]);
 const PSEUDOCODE_KEYS = Object.freeze(["language", "before", "after"]);
@@ -244,6 +246,19 @@ function validateChange(change, path, errors) {
     requireString(change.pseudocode.language, `${path}.pseudocode.language`, errors);
     requireString(change.pseudocode.before, `${path}.pseudocode.before`, errors, { allowEmpty: true });
     requireString(change.pseudocode.after, `${path}.pseudocode.after`, errors, { allowEmpty: true });
+  }
+
+  if (change.dependencies !== undefined &&
+      requireArray(change.dependencies, `${path}.dependencies`, errors)) {
+    change.dependencies.forEach((dependency, index) => {
+      const dependencyPath = `${path}.dependencies[${index}]`;
+      if (!requireObject(dependency, dependencyPath, errors)) return;
+      rejectUnknownKeys(dependency, DEPENDENCY_KEYS, dependencyPath, errors);
+      requireEnum(dependency.kind, ["include"], `${dependencyPath}.kind`, errors);
+      requireString(dependency.from, `${dependencyPath}.from`, errors);
+      requireString(dependency.to, `${dependencyPath}.to`, errors);
+      requireEnum(dependency.status, CHANGE_STATUSES, `${dependencyPath}.status`, errors);
+    });
   }
 }
 

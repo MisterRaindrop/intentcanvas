@@ -1,5 +1,6 @@
 import {
   clonePlanModel,
+  createApprovedSnapshot,
   createAgentEventAck,
   validateAgentEvent,
   validateApprovalDecision,
@@ -13,7 +14,8 @@ export const DEFAULT_REVISION_LIMIT = 100;
 const REVISION_OPERATIONS = new Set([
   "created",
   "replaced",
-  "module_replaced"
+  "module_replaced",
+  "decision_updated"
 ]);
 
 export class ReviewStoreError extends Error {
@@ -151,13 +153,17 @@ export class ReviewStore {
     };
   }
 
-  replaceReview(reviewId, plan, { now = () => new Date() } = {}) {
+  replaceReview(reviewId, plan, {
+    now = () => new Date(),
+    expectedRevision
+  } = {}) {
     if (!this.#reviews.has(reviewId)) {
       throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
         code: "review_not_found",
         status: 404
       });
     }
+    this.#assertExpectedRevision(reviewId, expectedRevision);
     this.#assertRevisionCapacity(reviewId);
 
     const review = normalizeProposedReview(plan);
@@ -180,7 +186,10 @@ export class ReviewStore {
     };
   }
 
-  replaceModule(reviewId, moduleId, input, { now = () => new Date() } = {}) {
+  replaceModule(reviewId, moduleId, input, {
+    now = () => new Date(),
+    expectedRevision
+  } = {}) {
     const current = this.#reviews.get(reviewId);
     if (!current) {
       throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
@@ -188,6 +197,7 @@ export class ReviewStore {
         status: 404
       });
     }
+    this.#assertExpectedRevision(reviewId, expectedRevision);
     this.#assertRevisionCapacity(reviewId);
 
     const moduleIndex = current.modules.findIndex((candidate) => candidate.id === moduleId);
@@ -290,6 +300,49 @@ export class ReviewStore {
     return revisions?.at(-1)?.revision ?? null;
   }
 
+  getExecutionGate(reviewId) {
+    const review = this.#reviews.get(reviewId);
+    if (!review) {
+      throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
+        code: "review_not_found",
+        status: 404
+      });
+    }
+    const blockingModules = review.modules
+      .filter((module) => module.approval.decision !== "approved")
+      .map((module) => ({
+        id: module.id,
+        decision: module.approval.decision
+      }));
+    return {
+      reviewId,
+      revision: this.getCurrentRevision(reviewId),
+      status: review.status,
+      allowed: review.status === "approved" && blockingModules.length === 0,
+      blockingModules
+    };
+  }
+
+  getApprovedSnapshot(reviewId) {
+    const gate = this.getExecutionGate(reviewId);
+    if (!gate.allowed) {
+      throw new ReviewStoreError(`Review is not fully approved: ${reviewId}`, {
+        code: "review_not_approved",
+        status: 409,
+        details: gate.blockingModules.map((module) => ({
+          path: `$.modules.${module.id}.approval`,
+          message: `module decision is ${module.decision}`,
+          code: "module_not_approved"
+        }))
+      });
+    }
+    const record = this.#revisions.get(reviewId).at(-1);
+    return createApprovedSnapshot(this.getReview(reviewId), {
+      revision: record.revision,
+      frozenAt: record.createdAt
+    });
+  }
+
   listRevisions(reviewId) {
     if (!this.#reviews.has(reviewId)) {
       throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
@@ -329,8 +382,8 @@ export class ReviewStore {
       });
     }
 
-    const review = this.#reviews.get(reviewId);
-    if (!review) {
+    const current = this.#reviews.get(reviewId);
+    if (!current) {
       throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
         code: "review_not_found",
         status: 404
@@ -355,7 +408,8 @@ export class ReviewStore {
       );
     }
 
-    const module = review.modules.find((candidate) => candidate.id === input.moduleId);
+    const moduleIndex = current.modules.findIndex((candidate) => candidate.id === input.moduleId);
+    const module = current.modules[moduleIndex];
     if (!module) {
       throw new ReviewStoreError(`Unknown module: ${input.moduleId}`, {
         code: "module_not_found",
@@ -363,8 +417,11 @@ export class ReviewStore {
       });
     }
 
+    this.#assertRevisionCapacity(reviewId);
+    const review = structuredClone(current);
+    const updatedModule = review.modules[moduleIndex];
     const updatedAt = timestampFrom(now);
-    module.approval = {
+    updatedModule.approval = {
       decision: input.decision,
       comment: input.comment ?? "",
       updatedAt
@@ -372,12 +429,19 @@ export class ReviewStore {
 
     updateReviewStatus(review);
     requireValidPlan(review);
+    const revision = this.#appendRevision(reviewId, review, {
+      operation: "decision_updated",
+      moduleId: updatedModule.id,
+      createdAt: updatedAt
+    });
+    this.#reviews.set(reviewId, review);
     return {
       reviewId,
-      moduleId: module.id,
-      approval: structuredClone(module.approval),
+      moduleId: updatedModule.id,
+      approval: structuredClone(updatedModule.approval),
       reviewStatus: review.status,
-      revision: currentRevision
+      revision: revision.revision,
+      revisionInfo: revision
     };
   }
 
@@ -478,7 +542,7 @@ export class ReviewStore {
         message: "Invalid revision snapshot in persisted Runtime state"
       });
       if (plan.id !== input.reviewId ||
-          (input.operation === "module_replaced" &&
+          (["module_replaced", "decision_updated"].includes(input.operation) &&
             (typeof input.moduleId !== "string" ||
               !plan.modules.some((module) => module.id === input.moduleId)))) {
         throw new ReviewStoreError("Invalid revision snapshot in persisted Runtime state", {
@@ -547,6 +611,27 @@ export class ReviewStore {
     history.push(record);
     this.#revisions.set(reviewId, history);
     return revisionMetadata(record);
+  }
+
+  #assertExpectedRevision(reviewId, expectedRevision) {
+    if (expectedRevision === undefined) return;
+    const currentRevision = this.getCurrentRevision(reviewId);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== currentRevision) {
+      throw new ReviewStoreError(
+        `Review ${reviewId} changed from revision ${String(expectedRevision)} to ${currentRevision}`,
+        {
+          code: "stale_review_revision",
+          status: 409,
+          details: [{
+            path: "$.expectedRevision",
+            message: "refresh before replacing approved structure",
+            code: "revision_mismatch",
+            expectedRevision,
+            currentRevision
+          }]
+        }
+      );
+    }
   }
 
   #assertRevisionCapacity(reviewId) {

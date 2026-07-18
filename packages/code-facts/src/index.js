@@ -45,3 +45,11 @@ export {
 } from "./inspect.js";
 
 export { CLI_HELP, runCli } from "./cli.js";
+
+export {
+  DEFAULT_SOURCE_INVENTORY_LIMIT,
+  SourceInventoryError,
+  inventorySourceFiles
+} from "./source-inventory.js";
+
+export { discoverGitIdentity } from "./git-identity.js";

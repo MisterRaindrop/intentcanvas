@@ -7,14 +7,14 @@ Use this reference whenever generating a Plan Model, revising a module, freezing
 Build models from repository evidence, not from the requested design alone. For C/C++ repositories with existing analysis artifacts, the fact extractor can be run without invoking a build:
 
 ```bash
-intentcanvas-code-facts extract <project-root> \
+node <skill-root>/scripts/code-facts.mjs extract <project-root> \
   --compile-commands <compile_commands.json> \
   --clang-uml <clang-uml.json> \
   --output <facts.json>
-intentcanvas-code-facts inspect <facts.json> --json
+node <skill-root>/scripts/code-facts.mjs inspect <facts.json> --json
 ```
 
-The extractor reads existing artifacts and reports diagnostics when they are absent; it must not be treated as evidence for symbols or edges it did not return. Use language-native read-only tools for repositories it cannot cover.
+The extractor reads existing artifacts, inventories C/C++ source files, and reports diagnostics when evidence is absent. A pass requires matching repository/base revision identity, complete source inventory, semantic coverage of every compiled source, and implementation fingerprints for planned body modifications. clang-uml declarations alone cannot prove a function body changed. Use a language-native AST/indexer that supplies implementation fingerprints when clang-uml cannot, and never treat missing facts as evidence of absence.
 
 Never place credentials, tokens, environment-variable values, or unnecessary source contents in a model.
 
@@ -24,7 +24,7 @@ Never place credentials, tokens, environment-variable values, or unnecessary sou
 - Use stable kebab-case IDs. Every ID must start with an ASCII letter or digit and then use only letters, digits, `.`, `_`, `:`, `/`, or `-` (maximum 256 characters). Keep plan, module, change, node, risk, and verification IDs unique in their respective scopes.
 - Use repository-relative source paths. Include a line only when a tool reported a positive, current line number.
 - Use ISO-8601 timestamps.
-- Validate every complete model with `intentcanvas plan validate <file>`.
+- Validate every complete model with `node <skill-root>/scripts/intentcanvas.mjs plan validate <file>`.
 
 ## Plan Model v1
 
@@ -35,7 +35,7 @@ The root object requires exactly this contract:
 - `id`, `title`, `goal`, `summary`: non-empty strings
 - `status`: `"in_review"` for a proposed plan
 - `createdAt`: ISO-8601 string
-- `project`: `{ "name", "repository", "baseRef" }`, all non-empty strings
+- `project`: `{ "name", "repository", "baseRef" }`, all non-empty strings; copy repository and exact base revision from the pre-change Code Facts rather than substituting a branch label
 - `modules`: non-empty array of complete module objects
 - `relationships`: array, possibly empty
 - `risks`: array, possibly empty
@@ -70,6 +70,7 @@ Each change requires:
 - `location`: `{ "file", "symbol" }`, both non-empty and fact-backed
 - `callPath`: non-empty array of `{ "label", "status", "collapsedCount"? }`
 - `pseudocode`: `{ "language", "before", "after" }`; `language` is non-empty and before/after may be empty strings when addition or removal makes that truthful
+- `dependencies` (optional): concrete include-edge changes such as `{ "kind": "include", "from": "src/a.cc", "to": "include/b.h", "status": "added" }`
 
 Use `collapsedCount` only as a positive integer for deliberately collapsed incidental calls. Keep one focused change per change object.
 
@@ -81,51 +82,44 @@ A risk requires `id`, `level`, `title`, `mitigation`, and a non-empty `moduleIds
 
 A verification item requires `id`, `type`, `command`, `expected`, and `moduleIds`. Every referenced module ID must exist. Commands describe checks to run after approval; do not run mutating or implementation commands during planning.
 
-Every module must be referenced by at least one verification item so any approved subset retains an applicable acceptance check.
+Every module must be referenced by at least one verification item so the approved contract has an explicit acceptance check for every reviewed area.
 
 ## Import and approval source of truth
 
 Use the CLI in this order:
 
 ```bash
-intentcanvas plan validate <plan.json>
-intentcanvas plan import <plan.json> [--runtime <url>]
+node <skill-root>/scripts/intentcanvas.mjs plan validate <plan.json>
+node <skill-root>/scripts/intentcanvas.mjs plan import <plan.json> [--runtime <url>]
 ```
 
-Relay the exact URL printed as `Review URL`. The Runtime, not the local plan file or chat transcript, owns approval state. After the user says review is complete, read:
+Relay the exact URL printed as `Review URL`. The Runtime, not the local plan file or chat transcript, owns approval state. After the user says review is complete, check the Runtime-owned gate:
 
 ```text
-GET <runtime>/api/reviews/<review-id>
+node <skill-root>/scripts/intentcanvas.mjs plan gate <review-id>
 ```
 
-Only `modules[].approval.decision == "approved"` authorizes implementation. `pending` and `changes_requested` do not.
+The first version requires every module to be approved before product-code writes. A zero exit code and `allowed: true` authorize implementation; `pending` and `changes_requested` do not. The Claude Code PreToolUse Hook checks the same gate mechanically.
 
 ### Single-module revision
 
 Write a file containing the complete replacement module object only—no root plan envelope. Keep its `id` equal to `<module-id>`, use pending approval, and run:
 
 ```bash
-intentcanvas plan revise <review-id> <module-id> <module.json> [--runtime <url>]
+node <skill-root>/scripts/intentcanvas.mjs plan revise <review-id> <module-id> <module.json> [--runtime <url>]
 ```
 
 The Runtime replaces that module, resets its approval to pending, retains the other modules, and prints the review URL. Never regenerate or re-import the full plan for feedback confined to one module. If the feedback truly changes cross-module relationships or top-level risks/checks, identify it as broader replanning instead of hiding it inside a module replacement.
 
 ## Frozen approved-scope snapshot
 
-`intentcanvas-diff` requires an input Plan whose status is `approved` and whose every included module is approved.
+After the full-plan gate passes, freeze the exact Runtime revision:
 
-For a fully approved review, save the Runtime model unchanged as the approved snapshot.
+```bash
+node <skill-root>/scripts/intentcanvas.mjs plan freeze <review-id> <approved-snapshot.json>
+```
 
-For partial approval, derive a strict snapshot that represents only the authorized contract:
-
-1. Keep the same plan ID and set plan status to `approved`.
-2. Keep only modules whose Runtime approval decision is `approved`; do not alter their approved content.
-3. Keep only relationships whose two endpoints remain.
-4. Filter each risk and verification item's `moduleIds` to the retained set; drop items with no remaining target.
-5. Keep at least one applicable verification item and renumber module order if needed.
-6. Validate the snapshot before editing product code.
-
-Do not mark pending modules approved merely to satisfy the diff tool. The snapshot is the exact implementation boundary.
+The result is an `IntentCanvasApprovedSnapshot` containing `reviewId`, Runtime `revision`, `frozenAt`, a deterministic `planDigest`, and the unmodified approved Plan. Never construct or edit this wrapper manually. Partial snapshots are deliberately unsupported in v1 because the write Hook cannot safely map arbitrary files to a partially approved module.
 
 ## Implemented Model
 
@@ -134,8 +128,8 @@ Do not mark pending modules approved merely to satisfy the diff tool. The snapsh
 When both pre-change and post-change Code Facts are available, compare them directly against the approved plan so Actual is never reconstructed from AI memory:
 
 ```bash
-intentcanvas-facts-diff \
-  <approved-plan.json> <current-facts.json> <implemented-facts.json> --markdown
+node <skill-root>/scripts/facts-diff.mjs \
+  <approved-snapshot.json> <current-facts.json> <implemented-facts.json> --markdown
 ```
 
 Exit code `0` passes, `3` requires human review for missing or unapproved drift, `1` is an execution/input failure, and `2` is invalid usage. Keep both facts files as acceptance evidence.
@@ -155,9 +149,8 @@ The Implemented Model uses the same v1 JSON shape so it can be validated and com
 Validate and compare:
 
 ```bash
-intentcanvas plan validate <approved-plan.json>
-intentcanvas plan validate <implemented.json>
-intentcanvas-diff <approved-plan.json> <implemented.json> --markdown
+node <skill-root>/scripts/intentcanvas.mjs plan validate <implemented.json>
+node <skill-root>/scripts/plan-diff.mjs <approved-snapshot.json> <implemented.json> --markdown
 ```
 
 Diff exit codes:

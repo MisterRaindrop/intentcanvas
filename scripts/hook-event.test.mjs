@@ -7,8 +7,10 @@ import {
   eventInputFromArguments,
   normalize,
   postEvent,
-  resolveEventEndpoint
+  resolveEventEndpoint,
+  verifyEventEndpointIdentity
 } from "./hook-event.mjs";
+import { runtimeIdentityProof } from "../packages/local-auth/src/index.js";
 
 const AUTH_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
@@ -132,10 +134,53 @@ test("posts a normalized event with an injectable transport", async () => {
   await postEvent(endpoint, event, {
     timeout: 500,
     authToken: AUTH_TOKEN,
-    transport
+    transport,
+    verifyIdentity: async () => true
   });
 
   assert.equal(received.type, "session_started");
   assert.equal(received.project.cwd, "/repo");
   assert.equal(authorization, `Bearer ${AUTH_TOKEN}`);
+});
+
+test("verifies a fresh challenge before the hook may send its bearer token", async () => {
+  const transport = {
+    request(url, _options, callback) {
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = () => {};
+      request.end = () => {
+        const challenge = new URL(url).searchParams.get("challenge");
+        const response = new EventEmitter();
+        response.statusCode = 200;
+        callback(response);
+        queueMicrotask(() => {
+          response.emit("data", Buffer.from(JSON.stringify({
+            service: "intentcanvas-runtime",
+            challenge,
+            proof: runtimeIdentityProof(AUTH_TOKEN, challenge)
+          })));
+          response.emit("end");
+        });
+      };
+      return request;
+    }
+  };
+  assert.equal(await verifyEventEndpointIdentity(
+    new URL("http://127.0.0.1:4317/api/events"),
+    AUTH_TOKEN,
+    { transport, randomBytesImpl: () => Buffer.alloc(32, 4) }
+  ), true);
+
+  let requests = 0;
+  await postEvent(
+    new URL("http://127.0.0.1:4317/api/events"),
+    normalize({ hook_event_name: "SessionStart", cwd: "/repo" }),
+    {
+      authToken: AUTH_TOKEN,
+      transport: { request() { requests += 1; } },
+      verifyIdentity: async () => false
+    }
+  );
+  assert.equal(requests, 0);
 });

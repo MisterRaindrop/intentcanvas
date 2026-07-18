@@ -127,6 +127,35 @@ test("uses semantic method and field kinds rather than class JSON value types", 
   assert.ok(parsed.symbols.some((symbol) => symbol.qualifiedName === "example::A::run(int)"));
 });
 
+test("symbol identity ignores line movement and only fingerprints bodies when supplied", () => {
+  const makeDocument = (line, body) => ({
+    diagram_type: "class",
+    elements: [{
+      id: "service",
+      type: "class",
+      name: "Service",
+      source_location: { file: "service.cc", line: 1 },
+      methods: [{
+        name: "run",
+        display_name: "run()",
+        source_location: { file: "service.cc", line },
+        ...(body === undefined ? {} : { body })
+      }]
+    }]
+  });
+  const first = parseClangUmlJson(makeDocument(3));
+  const moved = parseClangUmlJson(makeDocument(30));
+  const supplied = parseClangUmlJson(makeDocument(3, "return 1;"));
+  const firstMethod = first.symbols.find((symbol) => symbol.kind === "method");
+  const movedMethod = moved.symbols.find((symbol) => symbol.kind === "method");
+  const suppliedMethod = supplied.symbols.find((symbol) => symbol.kind === "method");
+
+  assert.equal(firstMethod.id, movedMethod.id);
+  assert.equal(firstMethod.fingerprint, movedMethod.fingerprint);
+  assert.equal(firstMethod.implementationFingerprint, undefined);
+  assert.match(suppliedMethod.implementationFingerprint, /^sha256:[0-9a-f]{64}$/u);
+});
+
 test("diagnoses incomplete and unresolved clang-uml records instead of inventing facts", () => {
   const parsed = parseClangUmlJson({
     diagram_type: "sequence",

@@ -8,9 +8,15 @@ import {
   osc8Hyperlink,
   parseJsonDocument,
   reviewUrl,
-  runCli
+  runCli,
+  verifyRuntimeIdentity
 } from "../src/cli.js";
-import { createTdePlanFixture } from "@intentcanvas/protocol";
+import {
+  APPROVED_SNAPSHOT_KIND,
+  createApprovedSnapshot,
+  createTdePlanFixture
+} from "@intentcanvas/protocol";
+import { runtimeIdentityProof } from "@intentcanvas/local-auth";
 
 const AUTH_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const HANDOFF = "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH";
@@ -31,6 +37,19 @@ function response(status, payload) {
   };
 }
 
+function approvedPlan() {
+  const plan = createTdePlanFixture();
+  plan.status = "approved";
+  for (const module of plan.modules) {
+    module.approval = {
+      decision: "approved",
+      comment: "reviewed",
+      updatedAt: "2026-07-18T00:00:00.000Z"
+    };
+  }
+  return plan;
+}
+
 function dependencies(overrides = {}) {
   const stdout = capture();
   const stderr = capture();
@@ -44,6 +63,9 @@ function dependencies(overrides = {}) {
       readFile: async () => JSON.stringify(createTdePlanFixture()),
       readStdin: async () => JSON.stringify(createTdePlanFixture()),
       fetch: async () => response(200, {}),
+      verifyRuntimeIdentity: async () => {},
+      writeWorkspaceBinding: async () => {},
+      removeWorkspaceBinding: async () => null,
       ...overrides
     }
   };
@@ -68,7 +90,38 @@ test("normalizes safe runtime URLs and encodes review ids", () => {
   assert.throws(() => normalizeRuntimeUrl("file:///tmp/runtime"), /http or https/);
   assert.throws(() => normalizeRuntimeUrl("http://user:pass@localhost:4317"), /credentials/);
   assert.throws(() => normalizeRuntimeUrl("http://localhost:4317/api"), /must not contain a path/);
-  assert.throws(() => normalizeRuntimeUrl("http://runtime.example.test:4317"), /must use https/);
+  assert.throws(() => normalizeRuntimeUrl("http://runtime.example.test:4317"), /loopback/);
+  assert.throws(() => normalizeRuntimeUrl("https://runtime.example.test"), /loopback/);
+});
+
+test("verifies a challenge response before any bearer-authenticated request", async () => {
+  let authorization;
+  await verifyRuntimeIdentity(async (url, options) => {
+    authorization = options.headers.Authorization;
+    const challenge = new URL(url).searchParams.get("challenge");
+    return response(200, {
+      service: "intentcanvas-runtime",
+      challenge,
+      proof: runtimeIdentityProof(AUTH_TOKEN, challenge)
+    });
+  }, DEFAULT_RUNTIME_URL, AUTH_TOKEN, {
+    randomBytesImpl: () => Buffer.alloc(32, 7)
+  });
+  assert.equal(authorization, undefined);
+
+  await assert.rejects(
+    verifyRuntimeIdentity(async (url) => {
+      const challenge = new URL(url).searchParams.get("challenge");
+      return response(200, {
+        service: "intentcanvas-runtime",
+        challenge,
+        proof: "Z".repeat(43)
+      });
+    }, DEFAULT_RUNTIME_URL, AUTH_TOKEN, {
+      randomBytesImpl: () => Buffer.alloc(32, 8)
+    }),
+    (error) => error.code === "runtime_identity_mismatch"
+  );
 });
 
 test("validates plans from stdin with machine-readable output", async () => {
@@ -81,6 +134,20 @@ test("validates plans from stdin with machine-readable output", async () => {
   assert.equal(result.reviewId, "doris-tde-demo");
   assert.equal(result.modules, 5);
   assert.equal(context.stderr.read(), "");
+});
+
+test("detaches an abandoned visual review without contacting Runtime", async () => {
+  let removed = false;
+  const context = dependencies({
+    fetch: async () => { throw new Error("must not fetch"); },
+    removeWorkspaceBinding: async () => {
+      removed = true;
+      return { reviewId: "review-1" };
+    }
+  });
+  assert.equal(await runCli(["plan", "detach"], context.values), 0);
+  assert.equal(removed, true);
+  assert.match(context.stdout.read(), /Detached visual review: review-1/u);
 });
 
 test("reports validation errors without echoing source input", async () => {
@@ -136,6 +203,68 @@ test("opens a review with a fresh one-use handoff from Runtime", async () => {
   assert.equal(osc8Hyperlink("Open", "https://example.test"), "\u001B]8;;https://example.test\u0007Open\u001B]8;;\u0007");
 });
 
+test("gets, replaces, freezes, and checks the execution gate", async () => {
+  const plan = createTdePlanFixture();
+  let written;
+  const getContext = dependencies({
+    fetch: async () => response(200, plan),
+    writeFile: async (path, source, options) => { written = { path, source, options }; }
+  });
+  assert.equal(await runCli(["plan", "get", plan.id, "plan.json"], getContext.values), 0);
+  assert.equal(written.path, "plan.json");
+  assert.equal(JSON.parse(written.source).id, plan.id);
+  assert.equal(written.options.mode, 0o600);
+
+  const replaceRequests = [];
+  const replaceContext = dependencies({
+    fetch: async (url, options) => {
+      replaceRequests.push({ url, options });
+      if (url.endsWith("/gate")) {
+        return response(200, {
+          reviewId: plan.id,
+          revision: 4,
+          status: "in_review",
+          allowed: false,
+          blockingModules: []
+        });
+      }
+      return url.endsWith("/api/handoffs")
+        ? response(201, { reviewId: plan.id, handoff: HANDOFF })
+        : response(200, { review: { id: plan.id } });
+    }
+  });
+  assert.equal(
+    await runCli(["plan", "replace", plan.id, "plan.json"], replaceContext.values),
+    0
+  );
+  assert.equal(replaceRequests[1].options.method, "PUT");
+  assert.equal(replaceRequests[1].options.headers["If-Match"], "\"4\"");
+  assert.match(replaceContext.stdout.read(), /Replaced review/);
+
+  const snapshot = createApprovedSnapshot(approvedPlan(), {
+    revision: 6,
+    frozenAt: "2026-07-18T00:00:00.000Z"
+  });
+  const freezeContext = dependencies({ fetch: async () => response(200, snapshot) });
+  assert.equal(
+    await runCli(["plan", "freeze", plan.id, "-"], freezeContext.values),
+    0
+  );
+  assert.equal(JSON.parse(freezeContext.stdout.read()).kind, APPROVED_SNAPSHOT_KIND);
+
+  const blocked = dependencies({
+    fetch: async () => response(200, {
+      reviewId: plan.id,
+      revision: 2,
+      status: "in_review",
+      allowed: false,
+      blockingModules: [{ id: "write-path", decision: "pending" }]
+    })
+  });
+  assert.equal(await runCli(["plan", "gate", plan.id], blocked.values), 3);
+  assert.equal(JSON.parse(blocked.stdout.read()).allowed, false);
+});
+
 test("revises one module through encoded API path", async () => {
   const requests = [];
   const module = createTdePlanFixture().modules[0];
@@ -143,6 +272,15 @@ test("revises one module through encoded API path", async () => {
     readFile: async () => JSON.stringify(module),
     fetch: async (url, options) => {
       requests.push({ url, options });
+      if (url.endsWith("/gate")) {
+        return response(200, {
+          reviewId: "review/1",
+          revision: 7,
+          status: "changes_requested",
+          allowed: false,
+          blockingModules: []
+        });
+      }
       return url.endsWith("/api/handoffs")
         ? response(201, { reviewId: "review/1", handoff: HANDOFF })
         : response(200, { module });
@@ -155,11 +293,12 @@ test("revises one module through encoded API path", async () => {
 
   assert.equal(exitCode, 0);
   assert.equal(
-    requests[0].url,
+    requests[1].url,
     `${DEFAULT_RUNTIME_URL}/api/reviews/review%2F1/modules/key-management`
   );
-  assert.equal(requests[0].options.method, "PATCH");
-  assert.equal(requests[1].url, `${DEFAULT_RUNTIME_URL}/api/handoffs`);
+  assert.equal(requests[1].options.method, "PATCH");
+  assert.equal(requests[1].options.headers["If-Match"], "\"7\"");
+  assert.equal(requests[2].url, `${DEFAULT_RUNTIME_URL}/api/handoffs`);
 });
 
 test("checks Runtime health and preserves structured server errors", async () => {
@@ -183,7 +322,7 @@ test("uses environment runtime URL and rejects unknown options", async () => {
   let requestedUrl;
   const context = dependencies({
     env: {
-      INTENTCANVAS_RUNTIME_URL: "https://runtime.example.test",
+      INTENTCANVAS_RUNTIME_URL: "http://127.0.0.1:5317",
       INTENTCANVAS_AUTH_TOKEN: AUTH_TOKEN
     },
     fetch: async (url) => {
@@ -192,7 +331,7 @@ test("uses environment runtime URL and rejects unknown options", async () => {
     }
   });
   assert.equal(await runCli(["status"], context.values), 0);
-  assert.equal(requestedUrl, "https://runtime.example.test/api/health");
+  assert.equal(requestedUrl, "http://127.0.0.1:5317/api/health");
 
   const invalid = dependencies();
   assert.equal(await runCli(["status", "--wat"], invalid.values), 2);

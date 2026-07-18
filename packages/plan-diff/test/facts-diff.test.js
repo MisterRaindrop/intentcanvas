@@ -84,6 +84,7 @@ function approvedPlan({ status = "modified" } = {}) {
 function codeFacts({
   fileFingerprint = fingerprint("a"),
   symbolFingerprint = fingerprint("b"),
+  symbolImplementationFingerprint = symbolFingerprint,
   symbolId = "ast:service-run",
   symbolConfidence = "high",
   confidence = "high",
@@ -93,7 +94,12 @@ function codeFacts({
   return {
     schemaVersion: "1.0.0",
     kind: "IntentCanvasCodeFacts",
-    project: { root: "/srv/example", name: "example" },
+    project: {
+      root: "/srv/example",
+      name: "example",
+      repository: "https://example.invalid/example.git",
+      baseRef: "main"
+    },
     files: [
       {
         path: "src/service.cc",
@@ -113,6 +119,8 @@ function codeFacts({
         file: "src/service.cc",
         location: { line },
         fingerprint: symbolFingerprint,
+        ...(symbolImplementationFingerprint === null
+          ? {} : { implementationFingerprint: symbolImplementationFingerprint }),
         confidence: symbolConfidence,
         source: source("clang-ast")
       }
@@ -120,6 +128,13 @@ function codeFacts({
     includeEdges: [],
     callEdges: [],
     diagnostics,
+    coverage: {
+      sourceInventoryComplete: true,
+      semanticInventoryComplete: true,
+      inventoryFileCount: 1,
+      compiledSourceCount: 1,
+      semanticSourceCount: 1
+    },
     confidence,
     source: source("@intentcanvas/code-facts")
   };
@@ -314,16 +329,64 @@ test("low-confidence facts and diagnostics never become a false pass", () => {
   assert.ok(report.findings.some((item) => item.code === "facts_diagnostic_warning"));
 });
 
-test("missing symbol fingerprints are reported as insufficient evidence", () => {
+test("missing implementation fingerprints are reported as insufficient evidence", () => {
   const current = codeFacts();
   const implemented = changedFacts();
-  delete current.symbols[0].fingerprint;
-  delete implemented.symbols[0].fingerprint;
+  delete current.symbols[0].implementationFingerprint;
+  delete implemented.symbols[0].implementationFingerprint;
 
   const report = auditPlanAgainstCodeFacts(approvedPlan(), current, implemented);
   assert.equal(report.status, "incomplete");
   assert.equal(report.plannedChanges[0].status, "evidence_insufficient");
   assert.equal(report.summary.evidenceIssues, 1);
+});
+
+test("a declaration-only fingerprint change cannot prove a modified implementation", () => {
+  const current = codeFacts({ symbolImplementationFingerprint: null });
+  const implemented = codeFacts({
+    fileFingerprint: fingerprint("c"),
+    symbolFingerprint: fingerprint("d"),
+    symbolImplementationFingerprint: null
+  });
+  const report = auditPlanAgainstCodeFacts(approvedPlan(), current, implemented);
+
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.plannedChanges[0].status, "evidence_insufficient");
+  assert.match(report.plannedChanges[0].message, /implementation fingerprints/u);
+});
+
+test("an explicitly approved include dependency is not reported as drift", () => {
+  const plan = approvedPlan();
+  plan.modules[0].changes[0].dependencies = [{
+    kind: "include",
+    from: "src/service.cc",
+    to: "include/config.hpp",
+    status: "added"
+  }];
+  const current = codeFacts();
+  const implemented = changedFacts();
+  for (const facts of [current, implemented]) {
+    facts.files.push({
+      path: "include/config.hpp",
+      language: "cpp-header",
+      fingerprint: fingerprint("e"),
+      confidence: "high",
+      source: source("filesystem")
+    });
+    facts.coverage.inventoryFileCount = 2;
+  }
+  implemented.includeEdges.push({
+    from: "src/service.cc",
+    to: "include/config.hpp",
+    confidence: "high",
+    source: source("clang-uml")
+  });
+
+  const report = auditPlanAgainstCodeFacts(plan, current, implemented);
+  assert.equal(report.status, "pass");
+  assert.ok(!report.findings.some(
+    (item) => item.code === "unapproved_include_dependency_change"
+  ));
 });
 
 test("semantic identities, digests, and output are stable across IDs, ordering, and line movement", () => {

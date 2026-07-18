@@ -59,6 +59,8 @@ export function inspectCodeFacts(candidate) {
     project: {
       name: facts.project.name ?? "",
       root: facts.project.root,
+      repository: facts.project.repository ?? null,
+      baseRef: facts.project.baseRef ?? null,
       buildSystems: Array.isArray(facts.project.buildSystems)
         ? facts.project.buildSystems.map((item) => item.type)
         : [],
@@ -72,6 +74,7 @@ export function inspectCodeFacts(candidate) {
       diagnostics: facts.diagnostics.length
     },
     diagnostics: diagnosticCounts,
+    coverage: facts.coverage ?? null,
     confidence: facts.confidence,
     source: facts.source
   };
@@ -86,6 +89,8 @@ export function formatCodeFactsInspection(summary) {
     `${summary.kind} ${summary.schemaVersion}`,
     `Project: ${summary.project.name || "(unnamed)"}`,
     `Root: ${summary.project.root}`,
+    `Repository: ${summary.project.repository ?? "not detected"}`,
+    `Base revision: ${summary.project.baseRef ?? "not detected"}`,
     `Build systems: ${systems}`,
     `Compilation database: ${compilationDatabase}`,
     `Files: ${summary.counts.files}`,
@@ -93,7 +98,13 @@ export function formatCodeFactsInspection(summary) {
     `Include edges: ${summary.counts.includeEdges}`,
     `Call edges: ${summary.counts.callEdges}`,
     `Diagnostics: ${summary.diagnostics.error} error, ${summary.diagnostics.warning} warning, ${summary.diagnostics.info} info`,
-    `Confidence: ${summary.confidence ?? "unknown"}`
+    `Confidence: ${summary.confidence ?? "unknown"}`,
+    `Source inventory: ${summary.coverage?.sourceInventoryComplete === true
+      ? `${summary.coverage.inventoryFileCount} files, complete`
+      : "incomplete"}`,
+    `Semantic coverage: ${summary.coverage
+      ? `${summary.coverage.semanticSourceCount}/${summary.coverage.compiledSourceCount} compiled sources`
+      : "unknown"}`
   ].join("\n");
 }
 

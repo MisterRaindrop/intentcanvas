@@ -13,6 +13,16 @@ export {
 export { createTdePlanFixture, tdePlanFixture } from "./fixtures/tde.js";
 
 export {
+  APPROVED_SNAPSHOT_KIND,
+  APPROVED_SNAPSHOT_SCHEMA_VERSION,
+  assertApprovedSnapshot,
+  cloneApprovedSnapshot,
+  createApprovedSnapshot,
+  planModelDigest,
+  validateApprovedSnapshot
+} from "./approved-snapshot.js";
+
+export {
   AGENT_EVENT_ACK_KIND,
   AGENT_EVENT_SCHEMA_VERSION,
   AGENT_EVENT_TYPES,

@@ -280,7 +280,8 @@ import {
     const operationLabels = {
       created: "创建计划",
       replaced: "替换整份计划",
-      module_replaced: "调整单个模块"
+      module_replaced: "调整单个模块",
+      decision_updated: "记录模块审批"
     };
     [...revisions].reverse().forEach((revision) => {
       if (!Number.isInteger(revision.revision) || revision.revision < 1 ||
@@ -300,7 +301,7 @@ import {
     });
     elements["revision-message"].textContent = revisions.length === 0
       ? "当前还没有版本记录。"
-      : `共 ${revisions.length} 个结构版本；模块审批不会创建新的结构版本。`;
+      : `共 ${revisions.length} 个版本；计划修改和模块审批都会生成不可重放的新版本。`;
   }
 
   function renderProgress() {
@@ -751,6 +752,22 @@ import {
           ? `${change.title}：${change.rationale}`
           : change.rationale;
         item.append(symbol, explanation);
+        if (Array.isArray(change.dependencies) && change.dependencies.length > 0) {
+          const dependencies = document.createElement("div");
+          dependencies.className = "change-dependencies";
+          change.dependencies.forEach((dependency) => {
+            const row = document.createElement("div");
+            row.className = "change-dependency";
+            row.appendChild(createChangeBadge(dependency.status));
+            const edge = document.createElement("code");
+            edge.textContent = dependency.kind === "include"
+              ? `#include: ${dependency.from} → ${dependency.to}`
+              : `${dependency.from} → ${dependency.to}`;
+            row.appendChild(edge);
+            dependencies.appendChild(row);
+          });
+          item.appendChild(dependencies);
+        }
         list.appendChild(item);
       });
 

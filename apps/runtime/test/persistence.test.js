@@ -139,7 +139,7 @@ test("RuntimeDataDirectoryLock fails closed on a stale PID lock", async (t) => {
   assert.equal(record.nonce, "dead-owner");
 });
 
-test("SerializedReviewWriter serializes writes and commits only persisted snapshots", async () => {
+test("SerializedReviewWriter serializes writes and enforces decision revision CAS", async () => {
   const store = new ReviewStore([createTdePlanFixture()]);
   let activeSaves = 0;
   let maximumActiveSaves = 0;
@@ -163,7 +163,14 @@ test("SerializedReviewWriter serializes writes and commits only persisted snapsh
     "doris-tde-demo",
     { moduleId: "write-path", decision: "approved", expectedRevision: 1 }
   ));
-  await Promise.all([first, second]);
+  const [firstResult, secondResult] = await Promise.allSettled([first, second]);
+  assert.equal(firstResult.status, "fulfilled");
+  assert.equal(secondResult.status, "rejected");
+  assert.equal(secondResult.reason.code, "stale_review_revision");
+  await writer.mutate((candidate) => candidate.submitDecision(
+    "doris-tde-demo",
+    { moduleId: "write-path", decision: "approved", expectedRevision: 2 }
+  ));
 
   assert.equal(maximumActiveSaves, 1);
   assert.equal(savedStates.length, 2);

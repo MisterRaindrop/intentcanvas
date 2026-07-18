@@ -83,6 +83,22 @@ test("stored changes_requested approvals also require an explanation", () => {
   assert.ok(result.errors.some((error) => error.code === "comment_required"));
 });
 
+test("changes can explicitly authorize concrete include dependency edges", () => {
+  const plan = createTdePlanFixture();
+  plan.modules[0].changes[0].dependencies = [{
+    kind: "include",
+    from: "be/src/security/key_manager.cpp",
+    to: "be/src/security/key_manager.h",
+    status: "added"
+  }];
+  assert.deepEqual(validatePlanModel(plan), { valid: true, errors: [] });
+
+  plan.modules[0].changes[0].dependencies[0].kind = "guessed";
+  assert.ok(validatePlanModel(plan).errors.some(
+    (error) => error.path.endsWith(".dependencies[0].kind")
+  ));
+});
+
 test("rejects unknown properties at every Plan Model structure level", () => {
   const cases = [
     ["$", (plan) => { plan.secret = "root"; }],
@@ -109,6 +125,15 @@ test("rejects unknown properties at every Plan Model structure level", () => {
     }],
     ["$.modules[0].changes[0].pseudocode", (plan) => {
       plan.modules[0].changes[0].pseudocode.secret = "pseudocode";
+    }],
+    ["$.modules[0].changes[0].dependencies[0]", (plan) => {
+      plan.modules[0].changes[0].dependencies = [{
+        kind: "include",
+        from: "a.cc",
+        to: "b.h",
+        status: "added",
+        secret: "dependency"
+      }];
     }],
     ["$.modules[0].approval", (plan) => {
       plan.modules[0].approval.secret = "approval";

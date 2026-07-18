@@ -16,12 +16,14 @@ pnpm dev
 pnpm intentcanvas status
 pnpm intentcanvas plan validate /path/to/plan.json
 pnpm intentcanvas plan import /path/to/plan.json
+pnpm intentcanvas plan gate <review-id>
+pnpm intentcanvas plan freeze <review-id> /path/to/approved-snapshot.json
 pnpm facts \
   extract /path/to/project --output /path/to/facts.json
 pnpm diff \
-  /path/to/approved-plan.json /path/to/implemented.json --markdown
+  /path/to/approved-snapshot.json /path/to/implemented.json --markdown
 pnpm facts-diff \
-  /path/to/approved-plan.json /path/to/current-facts.json \
+  /path/to/approved-snapshot.json /path/to/current-facts.json \
   /path/to/implemented-facts.json --markdown
 ```
 
@@ -31,7 +33,9 @@ Installed packages expose `intentcanvas`, `intentcanvas-code-facts`, `intentcanv
 
 IntentCanvas has no marketplace entry in this development checkout. Link or copy `skills/visual-plan` into `<codex-home>/skills/visual-plan`, start a new Codex task, and invoke `$visual-plan`. The Codex plugin manifest remains at `.codex-plugin/plugin.json` for validation and future packaging; no marketplace configuration is required or created.
 
-The Skill's gate is the same in every host: extract read-only facts, validate/import the Plan, open the CLI's Review URL, wait for Runtime module approval, implement only approved modules, generate an Implemented Model from fresh facts, and run `intentcanvas-diff`.
+The Skill resolves checkout-local scripts relative to its own directory, so it does not depend on globally installed binaries. Its workflow is: extract read-only facts, validate/import the Plan, open the CLI's Review URL, wait for full Runtime approval, freeze the exact approved revision, implement that contract, generate Actual from fresh facts, and run the diff. Codex currently follows this Skill gate procedurally; the synchronous PreToolUse enforcement is a Claude Code Hook capability.
+
+When the user explicitly abandons the workflow, they run `pnpm intentcanvas plan detach` to remove the current workspace's local review binding.
 
 ## tmux and SSH Bridge
 

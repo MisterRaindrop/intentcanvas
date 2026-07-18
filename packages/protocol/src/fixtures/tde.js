@@ -88,7 +88,15 @@ const fixture = {
             language: "cpp",
             before: "// 没有统一的加密密钥和算法抽象",
             after: "auto key = kms.generate_data_key();\nauto wrapped = kms.wrap_key(key);\nauto stream = crypto.create_encrypt_stream(key, AES_256_GCM);\nreturn {stream, wrapped, key.version()};"
-          }
+          },
+          dependencies: [
+            {
+              kind: "include",
+              from: "be/src/security/key_manager.cpp",
+              to: "be/src/security/aes_gcm_crypto_provider.h",
+              status: "added"
+            }
+          ]
         }
       ],
       approval: { decision: "pending", comment: "", updatedAt: null }
@@ -191,7 +199,15 @@ const fixture = {
             language: "cpp",
             before: "context.fs = storage_engine.get_file_system();\nRETURN_IF_ERROR(segment_writer.init(context.fs));",
             after: "auto fs = storage_engine.get_file_system();\nif (tablet_meta.tde_enabled()) {\n  fs = encrypted_fs.wrap(fs, key_manager, tablet_meta.key_info());\n}\ncontext.fs = fs;\nRETURN_IF_ERROR(segment_writer.init(context.fs));"
-          }
+          },
+          dependencies: [
+            {
+              kind: "include",
+              from: "be/src/olap/rowset/beta_rowset_writer.cpp",
+              to: "be/src/io/fs/encrypted_file_system.h",
+              status: "added"
+            }
+          ]
         }
       ],
       approval: { decision: "pending", comment: "", updatedAt: null }

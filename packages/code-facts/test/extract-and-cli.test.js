@@ -80,11 +80,22 @@ test("extracts protocol-valid facts with deterministic order and fingerprints", 
 
   assert.equal(first.kind, CODE_FACTS_KIND);
   assert.equal(first.schemaVersion, PROTOCOL_CODE_FACTS_SCHEMA_VERSION);
-  assert.equal(first.confidence, "high");
+  assert.equal(first.confidence, "medium");
   assert.deepEqual(validateCodeFacts(first), { valid: true, errors: [] });
   assert.equal(serializeCodeFacts(first), serializeCodeFacts(second));
-  assert.deepEqual(first.files.map((file) => file.path), ["src/helper.cpp", "src/main.cpp"]);
+  assert.deepEqual(first.files.map((file) => file.path), [
+    "include/helper.hpp",
+    "src/helper.cpp",
+    "src/main.cpp"
+  ]);
   assert.ok(first.files.every((file) => /^sha256:[0-9a-f]{64}$/u.test(file.fingerprint)));
+  assert.deepEqual(first.coverage, {
+    sourceInventoryComplete: true,
+    semanticInventoryComplete: false,
+    inventoryFileCount: 3,
+    compiledSourceCount: 2,
+    semanticSourceCount: 2
+  });
   assert.equal(first.symbols.length, 2);
   assert.equal(first.callEdges.length, 1);
   assert.equal(first.project.compileCommands, "build/compile_commands.json");
@@ -130,7 +141,7 @@ test("inspect returns a compact summary and rejects other document kinds", async
   });
   const summary = inspectCodeFacts(facts);
 
-  assert.equal(summary.counts.files, 2);
+  assert.equal(summary.counts.files, 3);
   assert.equal(summary.project.buildSystems[0], "cmake");
   assert.equal(summary.diagnostics.warning, 1);
   assert.throws(() => inspectCodeFacts({ ...facts, kind: "Other" }), /kind must equal/);
@@ -157,6 +168,6 @@ test("CLI extracts JSON to stdout and inspects it", async (t) => {
   await writeFile(outputPath, extracted.stdout);
   const inspected = await execute(process.execPath, [bin, "inspect", outputPath]);
   assert.equal(inspected.code, 0, inspected.stderr);
-  assert.match(inspected.stdout, /Files: 2/);
+  assert.match(inspected.stdout, /Files: 3/);
   assert.match(inspected.stdout, /Call edges: 1/);
 });

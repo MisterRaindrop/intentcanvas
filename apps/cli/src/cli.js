@@ -1,10 +1,18 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 
 import {
   bearerAuthorization,
-  readAuthToken
+  createRuntimeIdentityChallenge,
+  readAuthToken,
+  removeWorkspaceBinding,
+  verifyRuntimeIdentityProof,
+  writeWorkspaceBinding
 } from "@intentcanvas/local-auth";
-import { PLAN_SCHEMA_VERSION, validatePlanModel } from "@intentcanvas/protocol";
+import {
+  PLAN_SCHEMA_VERSION,
+  validateApprovedSnapshot,
+  validatePlanModel
+} from "@intentcanvas/protocol";
 
 export const CLI_VERSION = "0.2.0";
 export const DEFAULT_RUNTIME_URL = "http://127.0.0.1:4317";
@@ -18,11 +26,16 @@ const HELP = `IntentCanvas CLI ${CLI_VERSION}
 Usage:
   intentcanvas status [--runtime URL]
   intentcanvas plan validate <file|->
+  intentcanvas plan detach
   intentcanvas plan import <file|-> [--runtime URL]
+  intentcanvas plan get <review-id> <output|-> [--runtime URL]
+  intentcanvas plan replace <review-id> <plan-file|-> [--runtime URL]
+  intentcanvas plan freeze <review-id> <output|-> [--runtime URL]
+  intentcanvas plan gate <review-id> [--runtime URL]
   intentcanvas plan open <review-id> [--runtime URL]
   intentcanvas plan revise <review-id> <module-id> <module-file|-> [--runtime URL]
 
-Use '-' to read a plan or module from standard input.
+Use '-' to read JSON from standard input or write JSON to standard output.
 `;
 
 export class CliError extends Error {
@@ -67,13 +80,13 @@ export function normalizeRuntimeUrl(value) {
   } catch {
     throw new CliError("invalid_runtime_url", "Runtime URL is not valid");
   }
-  if (!['http:', 'https:'].includes(url.protocol)) {
+  if (!["http:", "https:"].includes(url.protocol)) {
     throw new CliError("invalid_runtime_url", "Runtime URL must use http or https");
   }
-  if (url.protocol === "http:" && !LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
+  if (!LOOPBACK_HOSTS.has(url.hostname.toLowerCase())) {
     throw new CliError(
-      "insecure_runtime_url",
-      "A non-loopback Runtime URL must use https"
+      "non_loopback_runtime_url",
+      "Runtime URL must use this machine's loopback address; use the SSH bridge for remote tmux"
     );
   }
   if (url.username || url.password || url.search || url.hash) {
@@ -178,6 +191,25 @@ function assertPlan(plan) {
   return plan;
 }
 
+function assertSnapshot(snapshot) {
+  const validation = validateApprovedSnapshot(snapshot);
+  if (!validation.valid) {
+    throw new CliError("invalid_approved_snapshot", "Approved Snapshot validation failed", {
+      details: validation.errors
+    });
+  }
+  return snapshot;
+}
+
+async function writeJsonDocument(path, value, dependencies) {
+  const source = `${JSON.stringify(value, null, 2)}\n`;
+  if (path === "-") {
+    write(dependencies.stdout, source);
+    return;
+  }
+  await dependencies.writeFile(path, source, { encoding: "utf8", mode: 0o600 });
+}
+
 function assertModule(module, expectedId) {
   if (!module || typeof module !== "object" || Array.isArray(module)) {
     throw new CliError("invalid_module", "Module must be a JSON object");
@@ -268,6 +300,41 @@ async function requestJson(fetchImpl, url, accessToken, options = {}, {
   return payload;
 }
 
+export async function verifyRuntimeIdentity(fetchImpl, runtime, accessToken, {
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  timeoutSignal = AbortSignal.timeout,
+  maxResponseBytes = MAX_RESPONSE_BYTES,
+  randomBytesImpl
+} = {}) {
+  const challenge = createRuntimeIdentityChallenge(randomBytesImpl);
+  let response;
+  try {
+    response = await fetchImpl(
+      `${runtime}/api/identity?challenge=${encodeURIComponent(challenge)}`,
+      {
+        redirect: "error",
+        signal: timeoutSignal(timeoutMs),
+        headers: { Accept: "application/json" }
+      }
+    );
+  } catch (error) {
+    if (error?.name === "AbortError" || error?.name === "TimeoutError") {
+      throw new CliError("runtime_timeout", "IntentCanvas Runtime identity check timed out");
+    }
+    throw new CliError("runtime_unreachable", "IntentCanvas Runtime is not reachable");
+  }
+
+  const payload = await readResponseJson(response, maxResponseBytes);
+  if (!response.ok || payload?.service !== "intentcanvas-runtime" ||
+      payload?.challenge !== challenge ||
+      !verifyRuntimeIdentityProof(accessToken, challenge, payload?.proof)) {
+    throw new CliError(
+      "runtime_identity_mismatch",
+      "The loopback service did not prove it is this user's IntentCanvas Runtime"
+    );
+  }
+}
+
 async function createBrowserHandoff(fetchImpl, runtime, accessToken, reviewId, requestOptions) {
   const safeReviewId = safeIdentifier(reviewId, "review id");
   const payload = await requestJson(
@@ -282,6 +349,21 @@ async function createBrowserHandoff(fetchImpl, runtime, accessToken, reviewId, r
     throw new CliError("invalid_runtime_response", "Runtime returned an invalid browser handoff");
   }
   return payload.handoff;
+}
+
+async function readExecutionGate(fetchImpl, runtime, accessToken, reviewId, requestOptions) {
+  const gate = await requestJson(
+    fetchImpl,
+    `${runtime}/api/reviews/${encodeURIComponent(reviewId)}/gate`,
+    accessToken,
+    {},
+    requestOptions
+  );
+  if (gate.reviewId !== reviewId || typeof gate.allowed !== "boolean" ||
+      !Number.isInteger(gate.revision) || gate.revision < 1) {
+    throw new CliError("invalid_runtime_response", "Runtime returned an invalid gate state");
+  }
+  return gate;
 }
 
 function requireArguments(args, count, usage) {
@@ -316,8 +398,13 @@ export async function runCli(argv, overrides = {}) {
     env: overrides.env ?? process.env,
     fetch: overrides.fetch ?? globalThis.fetch,
     readFile: overrides.readFile ?? readFile,
+    writeFile: overrides.writeFile ?? writeFile,
     readStdin: overrides.readStdin ?? defaultReadStdin,
     readAuthToken: overrides.readAuthToken ?? readAuthToken,
+    verifyRuntimeIdentity: overrides.verifyRuntimeIdentity ?? verifyRuntimeIdentity,
+    writeWorkspaceBinding: overrides.writeWorkspaceBinding ?? writeWorkspaceBinding,
+    removeWorkspaceBinding: overrides.removeWorkspaceBinding ?? removeWorkspaceBinding,
+    cwd: overrides.cwd ?? process.cwd(),
     home: overrides.home,
     stdout: overrides.stdout ?? process.stdout,
     stderr: overrides.stderr ?? process.stderr
@@ -349,6 +436,12 @@ export async function runCli(argv, overrides = {}) {
       if (accessToken === null) {
         throw new CliError("runtime_auth_required", "IntentCanvas local auth token was not found");
       }
+      await dependencies.verifyRuntimeIdentity(
+        dependencies.fetch,
+        runtime,
+        accessToken,
+        dependencies.requestOptions
+      );
       const health = await requestJson(
         dependencies.fetch,
         `${runtime}/api/health`,
@@ -379,6 +472,18 @@ export async function runCli(argv, overrides = {}) {
       return 0;
     }
 
+    if (action === "detach") {
+      requireArguments(args, 2, "intentcanvas plan detach");
+      const binding = await dependencies.removeWorkspaceBinding(
+        dependencies.cwd,
+        { home: dependencies.home }
+      );
+      writeLine(dependencies.stdout, binding === null
+        ? "No visual review is bound to this workspace."
+        : `Detached visual review: ${safeIdentifier(binding.reviewId, "review id")}`);
+      return 0;
+    }
+
     const runtime = normalizeRuntimeUrl(configuredRuntime);
     const accessToken = await dependencies.readAuthToken({
       env: dependencies.env,
@@ -387,6 +492,12 @@ export async function runCli(argv, overrides = {}) {
     if (accessToken === null) {
       throw new CliError("runtime_auth_required", "IntentCanvas local auth token was not found");
     }
+    await dependencies.verifyRuntimeIdentity(
+      dependencies.fetch,
+      runtime,
+      accessToken,
+      dependencies.requestOptions
+    );
 
     if (action === "import") {
       requireArguments(args, 3, "intentcanvas plan import <file|-> [--runtime URL]");
@@ -398,6 +509,11 @@ export async function runCli(argv, overrides = {}) {
       const importedId = safeIdentifier(typeof result.review?.id === "string"
         ? result.review.id
         : typeof result.id === "string" ? result.id : plan.id, "review id");
+      await dependencies.writeWorkspaceBinding({
+        cwd: dependencies.cwd,
+        reviewId: importedId,
+        runtimeUrl: runtime
+      }, { home: dependencies.home });
       const handoff = await createBrowserHandoff(
         dependencies.fetch,
         runtime,
@@ -410,6 +526,110 @@ export async function runCli(argv, overrides = {}) {
       return 0;
     }
 
+    if (action === "get") {
+      requireArguments(
+        args,
+        4,
+        "intentcanvas plan get <review-id> <output|-> [--runtime URL]"
+      );
+      const reviewId = safeIdentifier(args[2], "review id");
+      const result = await requestJson(
+        dependencies.fetch,
+        `${runtime}/api/reviews/${encodeURIComponent(reviewId)}`,
+        accessToken,
+        {},
+        dependencies.requestOptions
+      );
+      const plan = assertPlan(result.review ?? result);
+      if (plan.id !== reviewId) {
+        throw new CliError("invalid_runtime_response", "Runtime returned a different review");
+      }
+      await writeJsonDocument(args[3], plan, dependencies);
+      return 0;
+    }
+
+    if (action === "replace") {
+      requireArguments(
+        args,
+        4,
+        "intentcanvas plan replace <review-id> <plan-file|-> [--runtime URL]"
+      );
+      const reviewId = safeIdentifier(args[2], "review id");
+      const plan = assertPlan(await readDocument(args[3], dependencies));
+      if (plan.id !== reviewId) {
+        throw new CliError("review_id_mismatch", "Plan id does not match the requested review");
+      }
+      const gate = await readExecutionGate(
+        dependencies.fetch,
+        runtime,
+        accessToken,
+        reviewId,
+        dependencies.requestOptions
+      );
+      const result = await requestJson(
+        dependencies.fetch,
+        `${runtime}/api/reviews/${encodeURIComponent(reviewId)}`,
+        accessToken,
+        {
+          method: "PUT",
+          body: JSON.stringify(plan),
+          headers: { "If-Match": `"${gate.revision}"` }
+        },
+        dependencies.requestOptions
+      );
+      const replacedId = safeIdentifier(result.review?.id ?? reviewId, "review id");
+      await dependencies.writeWorkspaceBinding({
+        cwd: dependencies.cwd,
+        reviewId: replacedId,
+        runtimeUrl: runtime
+      }, { home: dependencies.home });
+      const handoff = await createBrowserHandoff(
+        dependencies.fetch,
+        runtime,
+        accessToken,
+        replacedId,
+        dependencies.requestOptions
+      );
+      writeLine(dependencies.stdout, `Replaced review: ${replacedId}`);
+      printReviewLink(dependencies.stdout, runtime, replacedId, handoff);
+      return 0;
+    }
+
+    if (action === "freeze") {
+      requireArguments(
+        args,
+        4,
+        "intentcanvas plan freeze <review-id> <output|-> [--runtime URL]"
+      );
+      const reviewId = safeIdentifier(args[2], "review id");
+      const snapshot = assertSnapshot(await requestJson(
+        dependencies.fetch,
+        `${runtime}/api/reviews/${encodeURIComponent(reviewId)}/approved`,
+        accessToken,
+        {},
+        dependencies.requestOptions
+      ));
+      if (snapshot.reviewId !== reviewId) {
+        throw new CliError("invalid_runtime_response", "Runtime returned a different review");
+      }
+      await writeJsonDocument(args[3], snapshot, dependencies);
+      return 0;
+    }
+
+    if (action === "gate") {
+      requireArguments(args, 3, "intentcanvas plan gate <review-id> [--runtime URL]");
+      const reviewId = safeIdentifier(args[2], "review id");
+      const gate = await readExecutionGate(
+        dependencies.fetch,
+        runtime,
+        accessToken,
+        reviewId,
+        dependencies.requestOptions
+      );
+      writeLine(dependencies.stdout, JSON.stringify(gate));
+      return gate.allowed ? 0 : 3;
+    }
+
     if (action === "open") {
       requireArguments(args, 3, "intentcanvas plan open <review-id> [--runtime URL]");
       const reviewId = safeIdentifier(args[2], "review id");
@@ -420,6 +640,11 @@ export async function runCli(argv, overrides = {}) {
         reviewId,
         dependencies.requestOptions
       );
+      await dependencies.writeWorkspaceBinding({
+        cwd: dependencies.cwd,
+        reviewId,
+        runtimeUrl: runtime
+      }, { home: dependencies.home });
       printReviewLink(dependencies.stdout, runtime, reviewId, handoff);
       return 0;
     }
@@ -432,11 +657,22 @@ export async function runCli(argv, overrides = {}) {
       );
       const [reviewId, moduleId, modulePath] = args.slice(2);
       const module = assertModule(await readDocument(modulePath, dependencies), moduleId);
+      const gate = await readExecutionGate(
+        dependencies.fetch,
+        runtime,
+        accessToken,
+        reviewId,
+        dependencies.requestOptions
+      );
       const result = await requestJson(
         dependencies.fetch,
         `${runtime}/api/reviews/${encodeURIComponent(reviewId)}/modules/${encodeURIComponent(moduleId)}`,
         accessToken,
-        { method: "PATCH", body: JSON.stringify(module) },
+        {
+          method: "PATCH",
+          body: JSON.stringify(module),
+          headers: { "If-Match": `"${gate.revision}"` }
+        },
         dependencies.requestOptions
       );
       writeLine(dependencies.stdout, `Revised module: ${safeIdentifier(
