@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runCli } from "../../../apps/cli/src/cli.js";
+import { dispatch } from "./dispatch.mjs";
 
-process.exitCode = await runCli(process.argv.slice(2));
+process.exitCode = await dispatch(process.argv.slice(2));

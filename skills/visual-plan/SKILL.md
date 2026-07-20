@@ -21,6 +21,7 @@ node <skill-root>/scripts/facts-diff.mjs ...
 - Confirm the repository CLI and local Runtime are available with `node <skill-root>/scripts/intentcanvas.mjs --version` and `node <skill-root>/scripts/intentcanvas.mjs status`.
 - Inspect source, symbols, dependencies, build metadata, and relevant tests without editing product code or running implementation commands.
 - Prefer language-server, AST, compiler, build-system, and `node <skill-root>/scripts/code-facts.mjs ...` output. Record unknowns as assumptions; never invent symbols, files, edges, or line numbers.
+- Run `node <skill-root>/scripts/code-facts.mjs prepare <project-root> --dry-run` when automatic evidence is useful. If the plan would configure CMake or invoke a project tool, show the fixed commands and obtain permission before running `prepare --output <current-facts.json>`. Capture current facts before implementation.
 
 ## 2. Write, validate, and import the plan
 
@@ -56,7 +57,9 @@ Never regenerate or re-import the whole plan for a single-module adjustment.
 
 - Re-extract facts from the resulting code; do not derive actual state from the proposed plan.
 - Prefer the direct evidence path: run `node <skill-root>/scripts/facts-diff.mjs <approved-snapshot.json> <current-facts.json> <implemented-facts.json> --markdown`.
+- Publish that same evidence into Studio with `node <skill-root>/scripts/intentcanvas.mjs acceptance facts <review-id> <current-facts.json> <implemented-facts.json>` and give the user its direct `#acceptance` link.
 - Generate a strict Implemented Model only when a visual Plan-shaped Actual view is also useful; validate it and run `node <skill-root>/scripts/plan-diff.mjs <approved-snapshot.json> <implemented.json> --markdown`.
+- When using an Implemented Model, publish it with `node <skill-root>/scripts/intentcanvas.mjs acceptance model <review-id> <implemented.json>` so the declared-model assurance is clearly distinguished from real Code Facts.
 - Report verification evidence, missing planned work, and all unapproved drift. A diff exit code of `3` is a review result, not a tool failure.
 - Emit `review_drift_detected` when the adapter is available and the diff reports drift.
 - Do not hide drift by editing the approved snapshot. Do not declare completion while unapproved core drift remains.

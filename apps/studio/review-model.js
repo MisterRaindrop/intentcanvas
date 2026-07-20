@@ -7,6 +7,10 @@ const PLAN_STATUSES = ["draft", "in_review", "changes_requested", "approved", "i
 const APPROVAL_DECISIONS = ["pending", "approved", "changes_requested"];
 const NODE_TYPES = ["module", "class", "interface", "function", "service", "data"];
 const RISK_LEVELS = ["low", "medium", "high", "critical"];
+const ACCEPTANCE_STATUSES = ["pass", "incomplete", "review_required"];
+const ACCEPTANCE_MODULE_STATUSES = [
+  "matched", "drifted", "review_required", "missing", "unapproved", "incomplete"
+];
 
 function incompatible(path, message) {
   throw new Error(`计划数据不兼容：${path} ${message}`);
@@ -247,5 +251,73 @@ export function normalizeDecisionResponse(raw, { expectedReviewId, expectedModul
   if (!Number.isInteger(raw.revision) || raw.revision < 1) {
     incompatible("decisionResponse.revision", "必须是当前计划的正整数版本");
   }
+  return structuredClone(raw);
+}
+
+function requiredNonNegativeInteger(value, path) {
+  if (!Number.isInteger(value) || value < 0) incompatible(path, "必须是非负整数");
+}
+
+export function normalizeAcceptanceResponse(raw, {
+  expectedReviewId,
+  expectedModuleIds
+} = {}) {
+  requiredObject(raw, "acceptanceResponse");
+  requiredString(raw.reviewId, "acceptanceResponse.reviewId");
+  if (expectedReviewId !== undefined && raw.reviewId !== expectedReviewId) {
+    incompatible("acceptanceResponse.reviewId", "与当前计划不一致");
+  }
+  if (raw.acceptance === null) return { reviewId: raw.reviewId, acceptance: null };
+  const record = requiredObject(raw.acceptance, "acceptanceResponse.acceptance");
+  if (record.schemaVersion !== "1.0.0" || record.kind !== "IntentCanvasAcceptanceRecord") {
+    incompatible("acceptanceResponse.acceptance", "不是受支持的验收报告");
+  }
+  if (record.reviewId !== raw.reviewId) {
+    incompatible("acceptanceResponse.acceptance.reviewId", "与当前计划不一致");
+  }
+  if (!Number.isInteger(record.approvedRevision) || record.approvedRevision < 1) {
+    incompatible("acceptanceResponse.acceptance.approvedRevision", "必须是正整数版本");
+  }
+  optionalIsoDate(record.generatedAt, "acceptanceResponse.acceptance.generatedAt", {
+    required: true
+  });
+  requiredEnum(record.sourceKind, ["model", "facts"], "acceptanceResponse.acceptance.sourceKind");
+  requiredEnum(record.status, ACCEPTANCE_STATUSES, "acceptanceResponse.acceptance.status");
+  const summary = requiredObject(record.summary, "acceptanceResponse.acceptance.summary");
+  for (const key of [
+    "totalFindings", "errors", "warnings", "plannedChanges", "satisfied",
+    "incomplete", "unapproved", "evidenceIssues"
+  ]) {
+    requiredNonNegativeInteger(summary[key], `acceptanceResponse.acceptance.summary.${key}`);
+  }
+  const moduleIds = expectedModuleIds === undefined ? null : new Set(expectedModuleIds);
+  requiredArray(record.modules, "acceptanceResponse.acceptance.modules").forEach((module, index) => {
+    const path = `acceptanceResponse.acceptance.modules[${index}]`;
+    requiredObject(module, path);
+    requiredString(module.moduleId, `${path}.moduleId`);
+    requiredString(module.name, `${path}.name`);
+    requiredEnum(module.status, ACCEPTANCE_MODULE_STATUSES, `${path}.status`);
+    if (moduleIds && !moduleIds.has(module.moduleId)) incompatible(`${path}.moduleId`, "不是当前计划模块");
+    for (const key of ["plannedChanges", "satisfied", "findingCount"]) {
+      requiredNonNegativeInteger(module[key], `${path}.${key}`);
+    }
+  });
+  requiredArray(record.findings, "acceptanceResponse.acceptance.findings").forEach((item, index) => {
+    const path = `acceptanceResponse.acceptance.findings[${index}]`;
+    requiredObject(item, path);
+    requiredString(item.code, `${path}.code`);
+    requiredString(item.category, `${path}.category`);
+    requiredEnum(item.severity, ["error", "warning"], `${path}.severity`);
+    requiredString(item.path, `${path}.path`);
+    requiredString(item.message, `${path}.message`);
+    if (item.moduleId !== null) {
+      requiredString(item.moduleId, `${path}.moduleId`);
+      if (moduleIds && !moduleIds.has(item.moduleId)) incompatible(`${path}.moduleId`, "不是当前计划模块");
+    }
+  });
+  requiredNonNegativeInteger(
+    record.truncatedFindings,
+    "acceptanceResponse.acceptance.truncatedFindings"
+  );
   return structuredClone(raw);
 }

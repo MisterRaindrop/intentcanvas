@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { runHostCli, startBackgroundRuntime } from "./scripts/host.mjs";
+
+const root = fileURLToPath(new URL("./", import.meta.url));
+const arguments_ = process.argv.slice(2);
+const command = arguments_[0];
+
+const HELP = `IntentCanvas
+
+First use:
+  ./intentcanvas setup
+
+Host:
+  intentcanvas start|stop|doctor
+
+Workflow:
+  intentcanvas status
+  intentcanvas plan ...
+  intentcanvas acceptance ...
+  intentcanvas facts prepare|extract|inspect ...
+  intentcanvas diff ...
+  intentcanvas facts-diff ...
+  intentcanvas bridge ...
+`;
+
+function runNode(entry, args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [resolve(root, entry), ...args], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "inherit"
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (signal) reject(new Error(`IntentCanvas command terminated by ${signal}`));
+      else resolvePromise(code ?? 1);
+    });
+  });
+}
+
+if (!command || ["help", "--help", "-h"].includes(command)) {
+  process.stdout.write(HELP);
+} else if (command === "--version") {
+  process.exitCode = await runNode("apps/cli/src/index.js", arguments_);
+} else if (["setup", "start", "stop", "doctor"].includes(command)) {
+  process.exitCode = await runHostCli(arguments_);
+} else {
+  let entry;
+  let forwarded;
+  if (["plan", "acceptance", "status"].includes(command)) {
+    if (!(command === "plan" && ["validate", "detach"].includes(arguments_[1]))) {
+      await startBackgroundRuntime();
+    }
+    entry = "apps/cli/src/index.js";
+    forwarded = arguments_;
+  } else if (command === "facts") {
+    entry = "packages/code-facts/bin/code-facts.js";
+    forwarded = arguments_.slice(1);
+  } else if (command === "diff") {
+    entry = "packages/plan-diff/src/bin.js";
+    forwarded = arguments_.slice(1);
+  } else if (command === "facts-diff") {
+    entry = "packages/plan-diff/src/facts-bin.js";
+    forwarded = arguments_.slice(1);
+  } else if (command === "bridge") {
+    entry = "packages/bridge/bin/intentcanvas-bridge.js";
+    forwarded = arguments_.slice(1);
+  } else {
+    process.stderr.write(`Unknown IntentCanvas command: ${command}\n\n${HELP}`);
+    process.exitCode = 2;
+  }
+  if (entry) process.exitCode = await runNode(entry, forwarded);
+}

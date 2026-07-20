@@ -3,10 +3,19 @@ import { resolve } from "node:path";
 
 import { extractCodeFacts, serializeCodeFacts } from "./extract.js";
 import { formatCodeFactsInspection, inspectCodeFacts } from "./inspect.js";
+import { prepareCodeFacts } from "./prepare.js";
 
 const HELP = `Usage:
+  code-facts prepare [project-root] [options]
   code-facts extract [project-root] [options]
   code-facts inspect [facts.json|-] [--json]
+
+Prepare options:
+  --compile-commands, -c <path>  Reuse a specific compile_commands.json
+  --work-dir <path>             Private preparation directory
+  --output, -o <path>           Write prepared Code Facts (default: stdout)
+  --dry-run                     Print the fixed commands without running them
+  --no-clang-uml                Prepare compiler and file facts only
 
 Extract options:
   --compile-commands, -c <path>  Use an existing compile_commands.json
@@ -57,6 +66,37 @@ function parseExtractArguments(arguments_) {
   return { projectRoot: projectRoot ?? process.cwd(), options };
 }
 
+function parsePrepareArguments(arguments_) {
+  const options = {};
+  let projectRoot;
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    if (["--compile-commands", "-c"].includes(argument)) {
+      options.compileCommandsPath = optionValue(arguments_, index, argument);
+      index += 1;
+    } else if (argument === "--work-dir") {
+      options.workDirectory = optionValue(arguments_, index, argument);
+      index += 1;
+    } else if (["--output", "-o"].includes(argument)) {
+      options.output = optionValue(arguments_, index, argument);
+      index += 1;
+    } else if (argument === "--dry-run") {
+      options.dryRun = true;
+    } else if (argument === "--no-clang-uml") {
+      options.runClangUml = false;
+    } else if (["--help", "-h"].includes(argument)) {
+      options.help = true;
+    } else if (argument.startsWith("-")) {
+      throw new TypeError(`Unknown option: ${argument}`);
+    } else if (projectRoot === undefined) {
+      projectRoot = argument;
+    } else {
+      throw new TypeError(`Unexpected argument: ${argument}`);
+    }
+  }
+  return { projectRoot: projectRoot ?? process.cwd(), options };
+}
+
 function parseInspectArguments(arguments_) {
   let path;
   let json = false;
@@ -81,7 +121,8 @@ async function readStandardInput(stdin) {
 export async function runCli(arguments_, {
   stdin = process.stdin,
   stdout = process.stdout,
-  stderr = process.stderr
+  stderr = process.stderr,
+  prepareCodeFactsImpl = prepareCodeFacts
 } = {}) {
   const [command, ...rest] = arguments_;
   if (command === undefined || ["--help", "-h", "help"].includes(command)) {
@@ -90,6 +131,24 @@ export async function runCli(arguments_, {
   }
 
   try {
+    if (command === "prepare") {
+      const { projectRoot, options } = parsePrepareArguments(rest);
+      if (options.help) {
+        stdout.write(HELP);
+        return 0;
+      }
+      const prepared = await prepareCodeFactsImpl(projectRoot, options);
+      if (options.dryRun) {
+        stdout.write(`${JSON.stringify(prepared.plan, null, 2)}\n`);
+        return 0;
+      }
+      const output = serializeCodeFacts(prepared.facts);
+      if (options.output === undefined || options.output === "-") stdout.write(output);
+      else await writeFile(resolve(options.output), output, { encoding: "utf8", mode: 0o600 });
+      stderr.write(`Prepared evidence manifest: ${prepared.manifestPath}\n`);
+      return prepared.facts.diagnostics.some((item) => item.severity === "error") ? 2 : 0;
+    }
+
     if (command === "extract") {
       const { projectRoot, options } = parseExtractArguments(rest);
       if (options.help) {

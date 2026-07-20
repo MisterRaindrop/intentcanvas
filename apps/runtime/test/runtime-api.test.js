@@ -212,6 +212,59 @@ test("API resets client-supplied approval and rejects stale review decisions", a
   assert.equal(current.modules[0].approval.decision, "pending");
 });
 
+test("Runtime computes, persists, serves, and invalidates compact acceptance results", async (t) => {
+  const runtime = await startManagedRuntime(t);
+  const plan = createTdePlanFixture();
+  plan.id = "acceptance-api";
+  const imported = await jsonRequest(`${runtime.baseUrl}/api/reviews`, "POST", plan);
+  let revision = imported.body.revision;
+  for (const module of imported.body.review.modules) {
+    const decision = await jsonRequest(
+      `${runtime.baseUrl}/api/reviews/acceptance-api/decisions`,
+      "POST",
+      { moduleId: module.id, decision: "approved", expectedRevision: revision }
+    );
+    assert.equal(decision.response.status, 200);
+    revision = decision.body.revision;
+  }
+  const snapshot = await (
+    await fetch(`${runtime.baseUrl}/api/reviews/acceptance-api/approved`)
+  ).json();
+  const implemented = structuredClone(snapshot.plan);
+  implemented.status = "implemented";
+
+  const accepted = await jsonRequest(
+    `${runtime.baseUrl}/api/reviews/acceptance-api/acceptance`,
+    "POST",
+    { mode: "model", implemented }
+  );
+  assert.equal(accepted.response.status, 201);
+  assert.equal(accepted.body.status, "pass");
+  assert.equal(accepted.body.approvedRevision, revision);
+  assert.equal("implemented" in accepted.body, false);
+
+  const visible = await (
+    await fetch(`${runtime.baseUrl}/api/reviews/acceptance-api/acceptance`)
+  ).json();
+  assert.equal(visible.acceptance.status, "pass");
+
+  const reopened = await jsonRequest(
+    `${runtime.baseUrl}/api/reviews/acceptance-api/decisions`,
+    "POST",
+    {
+      moduleId: imported.body.review.modules[0].id,
+      decision: "changes_requested",
+      comment: "review this module again",
+      expectedRevision: revision
+    }
+  );
+  assert.equal(reopened.response.status, 200);
+  const invalidated = await (
+    await fetch(`${runtime.baseUrl}/api/reviews/acceptance-api/acceptance`)
+  ).json();
+  assert.equal(invalidated.acceptance, null);
+});
+
 test("plans, approvals, revisions, and events recover after restart", async (t) => {
   const directories = await createRuntimeDirectories(t);
   const options = {

@@ -173,7 +173,12 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
         "compile_commands.json was not found; no compiler commands were inferred."));
     } else {
       const databaseSource = relativeSource(root, "compile_commands", compilationDatabase);
-      const commands = await readCompileCommands(compilationDatabase, { projectRoot: root });
+      const commands = await readCompileCommands(compilationDatabase, {
+        projectRoot: root,
+        ...(options.compilationDatabaseRoot === undefined
+          ? {}
+          : { databaseRoot: options.compilationDatabaseRoot })
+      });
       compilationLoaded = true;
       const absoluteFiles = new Map();
       for (const command of commands) {
@@ -215,6 +220,9 @@ export async function extractCodeFacts(projectRootOrOptions, maybeOptions) {
         clangSource = relativeSource(root, "clang-uml", absolutePath);
         parsed = await readClangUmlJson(absolutePath, {
           projectRoot: root,
+          ...(options.analysisRoot === undefined
+            ? {}
+            : { analysisRoot: options.analysisRoot }),
           sourcePath: pathForProject(root, absolutePath)
         });
       }

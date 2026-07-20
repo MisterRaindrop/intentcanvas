@@ -4,7 +4,7 @@ import { open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 export const EXTRACTOR_NAME = "@intentcanvas/code-facts";
-export const EXTRACTOR_VERSION = "0.2.0";
+export const EXTRACTOR_VERSION = "0.3.0";
 export const MAX_SOURCE_FILE_BYTES = 32 * 1024 * 1024;
 export const MAX_ANALYSIS_INPUT_BYTES = 64 * 1024 * 1024;
 

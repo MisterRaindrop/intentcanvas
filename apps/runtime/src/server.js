@@ -19,13 +19,14 @@ import {
   resolveDataDirectory
 } from "./persistence.js";
 import { RuntimeAuthManager } from "./auth-session.js";
+import { createAcceptanceRecord } from "./acceptance.js";
 import { ReviewStore, ReviewStoreError } from "./review-store.js";
 
 export { resolveDataDirectory } from "./persistence.js";
 
 export const RUNTIME_HOST = "127.0.0.1";
 export const RUNTIME_PORT = 4317;
-export const RUNTIME_VERSION = "0.2.0";
+export const RUNTIME_VERSION = "0.3.0";
 
 const MONOREPO_STUDIO_DIRECTORY = fileURLToPath(
   new URL("../../studio/", import.meta.url)
@@ -42,6 +43,7 @@ export function resolveStudioDirectory(
 export const DEFAULT_STUDIO_DIRECTORY = resolveStudioDirectory();
 
 const MAX_JSON_BYTES = 256 * 1024;
+const MAX_ACCEPTANCE_JSON_BYTES = 130 * 1024 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
 const CONTENT_TYPES = new Map([
@@ -90,7 +92,7 @@ function sendEmpty(response, status, headers = {}) {
   response.end();
 }
 
-async function readJson(request) {
+async function readJson(request, { maxBytes = MAX_JSON_BYTES } = {}) {
   const contentType = String(request.headers["content-type"] ?? "")
     .split(";", 1)[0]
     .trim()
@@ -105,8 +107,8 @@ async function readJson(request) {
   const declaredLength = request.headers["content-length"];
   if (declaredLength !== undefined) {
     const parsedLength = Number(declaredLength);
-    if (Number.isFinite(parsedLength) && parsedLength > MAX_JSON_BYTES) {
-      throw new ReviewStoreError(`JSON body exceeds ${MAX_JSON_BYTES} bytes`, {
+    if (Number.isFinite(parsedLength) && parsedLength > maxBytes) {
+      throw new ReviewStoreError(`JSON body exceeds ${maxBytes} bytes`, {
         code: "body_too_large",
         status: 413
       });
@@ -117,8 +119,8 @@ async function readJson(request) {
   let length = 0;
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > MAX_JSON_BYTES) {
-      throw new ReviewStoreError(`JSON body exceeds ${MAX_JSON_BYTES} bytes`, {
+    if (length > maxBytes) {
+      throw new ReviewStoreError(`JSON body exceeds ${maxBytes} bytes`, {
         code: "body_too_large",
         status: 413
       });
@@ -559,6 +561,38 @@ export function createRequestHandler({
         const snapshot = store.getApprovedSnapshot(segments[2]);
         sendJson(response, 200, snapshot, {
           headers: { "X-IntentCanvas-Revision": String(snapshot.revision) }
+        });
+        return;
+      }
+
+      if (request.method === "GET" && segments.length === 4 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          segments[3] === "acceptance") {
+        sendJson(response, 200, {
+          reviewId: segments[2],
+          acceptance: store.getAcceptance(segments[2])
+        });
+        return;
+      }
+
+      if (request.method === "POST" && segments.length === 4 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          segments[3] === "acceptance") {
+        const input = await readJson(request, { maxBytes: MAX_ACCEPTANCE_JSON_BYTES });
+        let record;
+        try {
+          record = createAcceptanceRecord(store.getApprovedSnapshot(segments[2]), input, { now });
+        } catch (error) {
+          throw new ReviewStoreError(`Acceptance evidence is invalid: ${error.message}`, {
+            code: "invalid_acceptance_evidence",
+            status: 400
+          });
+        }
+        const result = await writer.mutate(
+          (candidate) => candidate.recordAcceptance(segments[2], record)
+        );
+        sendJson(response, 201, result, {
+          headers: { "X-IntentCanvas-Revision": String(result.approvedRevision) }
         });
         return;
       }

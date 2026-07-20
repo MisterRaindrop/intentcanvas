@@ -1,6 +1,6 @@
 {
   "name": "intentcanvas",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Visual-first planning, review, execution, and verification for AI-assisted code changes.",
   "license": "Apache-2.0",
@@ -9,7 +9,12 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "intentcanvas": "./intentcanvas"
+  },
   "scripts": {
+    "setup": "node ./intentcanvas setup",
+    "doctor": "node ./intentcanvas doctor",
     "dev": "pnpm --filter @intentcanvas/runtime dev",
     "start": "pnpm --filter @intentcanvas/runtime start",
     "intentcanvas": "node apps/cli/src/index.js",

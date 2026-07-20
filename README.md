@@ -6,17 +6,19 @@ IntentCanvas turns an AI coding plan into a visual contract that a human can rev
 
 It is aimed at changes that are hard to judge from prose alone: large C/C++ systems, database kernels, distributed systems, cross-module features, and structural refactors.
 
-## What works in v0.2
+## What works in v0.3
 
 - A strict, versioned Plan Model and a Doris TDE example.
 - A visual Studio with a top-level module graph, one-line module summaries, simplified module diagrams, focused call paths, member changes, pseudocode, risks, and checks.
 - Previous/next module navigation, module-level approval, targeted feedback, and single-module replanning without regenerating the whole design.
 - A loopback-only Runtime with atomic persistent storage, decision-inclusive revision history, event ingestion, an execution gate, and revision-bound Approved Snapshots.
 - A terminal CLI that validates, imports, gets, replaces, revises, checks/finalizes approval, and prints OSC8 clickable review links.
-- Deterministic C/C++ Code Facts ingestion from an existing `compile_commands.json` and clang-uml JSON, plus a bounded full source inventory, Git identity, provenance, coverage, and honest implementation fingerprints.
+- Deterministic C/C++ Code Facts ingestion plus `facts prepare`: reuse existing build evidence or safely configure CMake in a private analysis directory, generate a bounded clang-uml config, run tools without a shell, and retain an audit manifest.
 - Approved-Snapshot-versus-Implemented model and direct before/after Code Facts drift reports, including project identity and concrete include authorization.
+- A Plan-versus-Actual acceptance view in Studio with an overall result, compact evidence counts, per-module status, and clickable findings. Runtime computes the report against its own approved revision and invalidates it whenever the plan changes.
 - A safe SSH/tmux Bridge that creates a same-port loopback forward on the local client; the remote CLI prints the authenticated clickable URL.
-- Claude Code and Codex packaging through the shared `visual-plan` Skill, plus a synchronous fail-closed write gate for bound reviews and separate fail-open lifecycle telemetry.
+- A repository launcher with one-command setup, background Runtime start/stop, `doctor`, a user command link, Claude marketplace installation, and Codex Skill linking.
+- Claude Code and Codex packaging through the shared `visual-plan` Skill, plus a synchronous fail-closed Claude write gate for bound reviews and separate fail-open lifecycle telemetry.
 
 The governing rule is:
 
@@ -29,76 +31,90 @@ actual implementation is checked against the approved contract
 
 ## First five minutes
 
-Requirements: Node.js 22+ and pnpm 11.9+.
+Requirement: Node.js 22+. Corepack or pnpm is used automatically during setup.
 
 ```bash
 git clone https://github.com/MisterRaindrop/intentcanvas.git
 cd intentcanvas
-pnpm install
-pnpm dev
+./intentcanvas setup
 ```
 
-The Runtime prints `Open visual plan` as a clickable terminal link. In iTerm2 and other OSC8-capable terminals, click it directly. Each link contains a random handoff that expires after 60 seconds and works once; run `pnpm intentcanvas plan open doris-tde-demo` whenever you need a fresh link. A bare `?review=...` URL deliberately cannot open a new browser session.
+Setup installs workspace links, creates private local credentials, starts Runtime in the background, links the `visual-plan` Codex Skill, registers the local Claude marketplace when Claude Code is present, and places an `intentcanvas` command under `~/.local/bin`. It never overwrites an unrelated command or Skill. Run `./intentcanvas doctor` for one JSON diagnosis.
 
-State is stored atomically under `.intentcanvas/runtime/state.json`; restarting the Runtime keeps plans, approvals, decision revisions, and events. Decision and structure updates carry revision preconditions, so a concurrent review mutation between client preflight and commit is rejected. One process owns a data directory at a time, and each review retains at most 100 snapshots.
+The Runtime and CLI print clickable terminal links. In iTerm2 and other OSC8-capable terminals, click one directly. Each link contains a random handoff that expires after 60 seconds and works once; run `intentcanvas plan open doris-tde-demo` whenever you need a fresh link. A bare `?review=...` URL deliberately cannot open a new browser session.
+
+With normal setup, state is stored atomically under `~/.intentcanvas/runtime/state.json` (or `INTENTCANVAS_DATA_DIR`); restarting the Runtime keeps plans, approvals, decision revisions, events, and acceptance results. Decision and structure updates carry revision preconditions, so a concurrent review mutation between client preflight and commit is rejected. One process owns a data directory at a time, and each review retains at most 100 snapshots.
 
 ## Use it for a real change
 
-Keep `pnpm dev` running. In another terminal, validate and import the JSON plan produced by the Skill:
+The launcher starts Runtime automatically for networked workflow commands. Validate and import the JSON plan produced by the Skill:
 
 ```bash
-pnpm intentcanvas plan validate ./plan.json
-pnpm intentcanvas plan import ./plan.json
+intentcanvas plan validate ./plan.json
+intentcanvas plan import ./plan.json
 ```
 
 Click the printed review link. Start at the overall module graph, enter one module at a time, and either approve it or explain what must change. For feedback confined to one module, the agent submits only the complete replacement module:
 
 ```bash
-pnpm intentcanvas plan revise <review-id> <module-id> ./module.json
+intentcanvas plan revise <review-id> <module-id> ./module.json
 ```
 
 That module returns to `pending`; approvals for untouched modules remain valid. Broader relationship or risk changes still require whole-plan replanning.
 
-The v0.2 mechanical gate requires every module to be approved before product-code writes. Check and freeze the exact approved Runtime revision:
+The v0.3 mechanical gate requires every module to be approved before product-code writes. Check and freeze the exact approved Runtime revision:
 
 ```bash
-pnpm intentcanvas plan gate <review-id>
-pnpm intentcanvas plan freeze <review-id> ./approved-snapshot.json
+intentcanvas plan gate <review-id>
+intentcanvas plan freeze <review-id> ./approved-snapshot.json
 ```
 
-If you explicitly abandon the visual workflow, `pnpm intentcanvas plan detach` removes only the current workspace's private gate binding; it does not rewrite code or approval history.
+If you explicitly abandon the visual workflow, `intentcanvas plan detach` removes only the current workspace's private gate binding; it does not rewrite code or approval history.
 
 The strongest acceptance path compares that revision-bound snapshot against Code Facts extracted before and after implementation:
 
 ```bash
-pnpm facts-diff ./approved-snapshot.json ./current-facts.json ./implemented-facts.json --markdown
+intentcanvas acceptance facts <review-id> ./current-facts.json ./implemented-facts.json
 ```
 
 You can also validate and compare a fact-derived Implemented Model:
 
 ```bash
-pnpm intentcanvas plan validate ./implemented.json
-pnpm diff ./approved-snapshot.json ./implemented.json --markdown
+intentcanvas plan validate ./implemented.json
+intentcanvas acceptance model <review-id> ./implemented.json
 ```
 
-Exit code `0` means the structural contract matches. Exit code `3` means missing or unapproved drift needs human review; it is not silently accepted.
+The acceptance command prints a fresh link ending in `#acceptance`; click it to see the result in the same HTML review. Exit code `0` means the structural contract matches. Exit code `4` means the published result is incomplete or requires human review; it is not silently accepted.
 
 ## C/C++ facts without guessing
 
-IntentCanvas does not parse source by impression. Its first extractor consumes existing build and semantic artifacts without running a build or compiler:
+IntentCanvas does not parse source by impression. Preview the exact preparation commands first:
 
 ```bash
-pnpm facts extract /path/to/project \
+intentcanvas facts prepare /path/to/project --dry-run
+```
+
+Then explicitly run preparation. Existing `compile_commands.json` is reused. If it is missing, v0.3 supports a fixed CMake configure in a private directory under `~/.intentcanvas/evidence`; clang-uml is run with a generated class/include configuration when available:
+
+```bash
+intentcanvas facts prepare /path/to/project --output /tmp/current-facts.json
+intentcanvas facts inspect /tmp/current-facts.json
+```
+
+The original fully read-only extractor remains available for pre-generated artifacts:
+
+```bash
+intentcanvas facts extract /path/to/project \
   --compile-commands /path/to/project/build/compile_commands.json \
   --clang-uml /path/to/project/build/clang-uml.json \
   --output /tmp/code-facts.json
 
-pnpm facts inspect /tmp/code-facts.json
+intentcanvas facts inspect /tmp/code-facts.json
 ```
 
 The output contains the full in-scope C/C++ file inventory, compilation coverage, Git repository/base revision, symbols, includes, calls, diagnostics, provenance, declaration fingerprints, and implementation fingerprints only when an analysis artifact actually supplies a body. New source files are therefore visible even before they enter `compile_commands.json`. clang-uml alone does not attest that every symbol/body was emitted, so it remains medium confidence; missing or partial evidence cannot produce a false pass.
 
-Generating `compile_commands.json` and invoking clang-uml remain explicit project-specific steps in v0.2 because build commands can change a checkout. The Skill must obtain permission before running them.
+`prepare` is explicit because CMake configuration evaluates project build logic. It uses fixed argument arrays and no shell, writes outside the checkout by default, limits tool time/output, and records the exact invocations in `manifest.json`. Projects without an existing compilation database currently receive automatic generation only for CMake; other build systems remain an explicit v0.3 follow-up.
 
 ## tmux, iTerm2, and remote servers
 
@@ -108,10 +124,10 @@ When the Runtime runs on a remote SSH host, a process inside that host cannot cr
 
 ```bash
 # On the laptop; keep this process open. Both sides default to port 4317.
-pnpm bridge ssh user@build-host --review <review-id> --remote-port 4317
+intentcanvas bridge ssh user@build-host --review <review-id> --remote-port 4317
 
 # In Claude/Codex/tmux on the remote host, after the tunnel is ready:
-pnpm intentcanvas plan open <review-id>
+intentcanvas plan open <review-id>
 ```
 
 Click the fresh link printed in the remote terminal. iTerm opens `127.0.0.1:4317` on the laptop, and the same-port Bridge carries it to the remote Runtime. The Bridge invokes `ssh` with an argument array and no shell, validates all inputs, and binds both ends to loopback. Choosing a different local port is an advanced fallback and requires rewriting the port in the fresh link.
@@ -119,14 +135,14 @@ Click the fresh link printed in the remote terminal. iTerm opens `127.0.0.1:4317
 Useful diagnostics:
 
 ```bash
-pnpm bridge environment
+intentcanvas bridge environment
 ```
 
-The fully automatic Moshi-style desktop handoff is a later desktop-host feature. The v0.2 Bridge intentionally does not pretend a remote process can open a local tunnel by itself.
+The fully automatic Moshi-style remote desktop handoff is still a later desktop-host feature. The v0.3 Bridge intentionally does not pretend a remote process can open a local tunnel by itself.
 
 ## Claude Code and Codex
 
-For Claude Code development:
+Normal installation is handled by `./intentcanvas setup`. For manual Claude Code development:
 
 ```bash
 claude plugin validate --strict /absolute/path/to/intentcanvas
@@ -135,7 +151,7 @@ claude --plugin-dir /absolute/path/to/intentcanvas
 
 Invoke `/intentcanvas:visual-plan` or ask Claude to create an IntentCanvas visual plan.
 
-For Codex development, link or copy `skills/visual-plan` into the Codex skills directory and invoke `$visual-plan`. No marketplace entry is created in this repository. See the focused [Claude Code](integrations/claude-code/README.md) and [Codex](integrations/codex/README.md) guides.
+The repository now contains a Claude marketplace catalog, so manual users may also run `claude plugin marketplace add MisterRaindrop/intentcanvas` followed by `claude plugin install intentcanvas@intentcanvas`. For Codex development, link or copy `skills/visual-plan` into the Codex skills directory and invoke `$visual-plan`; setup performs that link without replacing an existing Skill. See the focused [Claude Code](integrations/claude-code/README.md) and [Codex](integrations/codex/README.md) guides.
 
 ## Architecture and checks
 

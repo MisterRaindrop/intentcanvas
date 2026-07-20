@@ -1,4 +1,5 @@
 import {
+  normalizeAcceptanceResponse,
   normalizeDecisionResponse,
   normalizeReview,
   reviewIdFromSearch
@@ -29,6 +30,7 @@ import {
   const REVIEW_ENDPOINT = `/api/reviews/${encodeURIComponent(REVIEW_ID)}`;
   const DECISIONS_ENDPOINT = `${REVIEW_ENDPOINT}/decisions`;
   const REVISIONS_ENDPOINT = `${REVIEW_ENDPOINT}/revisions`;
+  const ACCEPTANCE_ENDPOINT = `${REVIEW_ENDPOINT}/acceptance`;
 
   const CHANGE_LABELS = {
     added: "新增",
@@ -53,6 +55,8 @@ import {
     revision: null,
     revisionsLoaded: false,
     staleReview: false,
+    acceptance: null,
+    acceptanceLoaded: false,
     handoff: handoffFromSearch(),
     sessionToken: sessionFromStorage()
   };
@@ -72,6 +76,10 @@ import {
       "review-progress", "start-review-button", "architecture-graph", "architecture-lines",
       "architecture-nodes", "mobile-relationships", "module-summaries", "breadcrumb-overview",
       "risks-list", "verification-list",
+      "refresh-acceptance-button", "acceptance-message", "acceptance-empty",
+      "acceptance-report", "acceptance-status", "acceptance-result-title",
+      "acceptance-result-copy", "acceptance-generated-at", "acceptance-summary",
+      "acceptance-modules", "acceptance-findings-panel", "acceptance-findings",
       "breadcrumb-module", "module-position", "module-title", "module-summary", "module-decision",
       "module-flow", "flow-expanded", "change-groups", "pseudocode-grid", "decision-comment",
       "decision-message", "request-changes-button", "approve-button", "previous-module",
@@ -163,6 +171,8 @@ import {
       const revision = Number(response.headers.get("X-IntentCanvas-Revision"));
       state.revision = Number.isInteger(revision) && revision > 0 ? revision : null;
       state.revisionsLoaded = false;
+      state.acceptanceLoaded = false;
+      state.acceptance = null;
       state.staleReview = state.revision === null;
       elements["review-id"].textContent = state.review.id;
       elements["review-revision"].textContent = state.revision === null
@@ -171,6 +181,7 @@ import {
       setConnection("计划已连接", "ready");
       renderOverview();
       routeFromHash();
+      fetchAcceptance();
     } catch (error) {
       showError(error instanceof Error ? error.message : "无法连接计划服务");
     }
@@ -206,12 +217,19 @@ import {
     return state.review?.modules.find((module) => module.id === moduleId) || null;
   }
 
-  function openOverview({ updateHash = true } = {}) {
+  function openOverview({ updateHash = true, scrollTop = true } = {}) {
     state.selectedModuleId = null;
     showView("overview");
     if (updateHash && window.location.hash !== "#overview") window.location.hash = "overview";
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    if (scrollTop) window.scrollTo({ top: 0, behavior: "smooth" });
     window.requestAnimationFrame(layoutArchitectureGraph);
+  }
+
+  function scrollToAcceptance() {
+    if (window.location.hash !== "#acceptance") return;
+    window.requestAnimationFrame(() => {
+      byId("acceptance")?.scrollIntoView({ behavior: "auto", block: "start" });
+    });
   }
 
   function openModule(moduleId, { updateHash = true } = {}) {
@@ -236,6 +254,9 @@ import {
     const hash = window.location.hash.replace(/^#/, "");
     if (hash.startsWith("module/")) {
       openModule(decodeURIComponent(hash.slice("module/".length)), { updateHash: false });
+    } else if (hash === "acceptance") {
+      openOverview({ updateHash: false, scrollTop: false });
+      scrollToAcceptance();
     } else {
       openOverview({ updateHash: hash !== "overview" });
     }
@@ -250,6 +271,148 @@ import {
     renderModuleSummaries();
     renderRisks();
     renderVerification();
+    renderAcceptance();
+  }
+
+  async function fetchAcceptance() {
+    if (!state.review) return;
+    elements["acceptance-message"].textContent = "正在读取验收结果……";
+    elements["refresh-acceptance-button"].disabled = true;
+    try {
+      const response = await fetch(ACCEPTANCE_ENDPOINT, {
+        headers: reviewHeaders()
+      });
+      if (response.status === 401) {
+        forgetSession();
+        throw new Error("浏览器会话已失效，请从终端重新打开计划");
+      }
+      if (!response.ok) throw new Error(`服务返回 ${response.status}`);
+      const payload = normalizeAcceptanceResponse(await response.json(), {
+        expectedReviewId: state.review.id,
+        expectedModuleIds: state.review.modules.map((module) => module.id)
+      });
+      state.acceptance = payload.acceptance;
+      state.acceptanceLoaded = true;
+      renderAcceptance();
+      scrollToAcceptance();
+    } catch (error) {
+      state.acceptanceLoaded = false;
+      elements["acceptance-message"].textContent = `验收结果读取失败：${error instanceof Error ? error.message : "请稍后重试"}`;
+    } finally {
+      elements["refresh-acceptance-button"].disabled = false;
+    }
+  }
+
+  function acceptanceCopy(status) {
+    if (status === "pass") {
+      return {
+        title: "实现与批准计划一致",
+        copy: "没有发现缺失或计划外的结构修改，可以继续结合编译、测试和性能结果完成验收。"
+      };
+    }
+    if (status === "incomplete") {
+      return {
+        title: "计划内容还没有完全落实",
+        copy: "存在未观察到的计划修改或证据不足；请先补齐实现和代码事实。"
+      };
+    }
+    return {
+      title: "发现计划外修改，需要重新评审",
+      copy: "实际实现超出了批准范围；请查看问题列表，修正实现或重新生成计划。"
+    };
+  }
+
+  function renderAcceptance() {
+    const empty = elements["acceptance-empty"];
+    const report = elements["acceptance-report"];
+    if (!state.acceptanceLoaded) {
+      empty.hidden = true;
+      report.hidden = true;
+      return;
+    }
+    const acceptance = state.acceptance;
+    if (!acceptance) {
+      elements["acceptance-message"].textContent = "当前批准版本还没有验收报告。";
+      empty.hidden = false;
+      report.hidden = true;
+      return;
+    }
+
+    empty.hidden = true;
+    report.hidden = false;
+    elements["acceptance-message"].textContent = `报告绑定计划版本 ${acceptance.approvedRevision}，证据类型：${acceptance.sourceKind === "facts" ? "真实代码事实" : "实现模型"}。`;
+    const copy = acceptanceCopy(acceptance.status);
+    elements["acceptance-status"].className = `acceptance-status is-${acceptance.status.replaceAll("_", "-")}`;
+    elements["acceptance-status"].textContent = acceptance.status === "pass"
+      ? "通过"
+      : acceptance.status === "incomplete" ? "未完成" : "需评审";
+    elements["acceptance-result-title"].textContent = copy.title;
+    elements["acceptance-result-copy"].textContent = copy.copy;
+    elements["acceptance-generated-at"].dateTime = acceptance.generatedAt;
+    elements["acceptance-generated-at"].textContent = new Date(acceptance.generatedAt).toLocaleString();
+
+    const summary = elements["acceptance-summary"];
+    summary.replaceChildren();
+    for (const [label, value] of [
+      ["计划修改", acceptance.summary.plannedChanges],
+      ["已证明完成", acceptance.summary.satisfied],
+      ["未完成", acceptance.summary.incomplete],
+      ["计划外修改", acceptance.summary.unapproved],
+      ["证据问题", acceptance.summary.evidenceIssues]
+    ]) {
+      const item = document.createElement("div");
+      const term = document.createElement("dt");
+      term.textContent = label;
+      const description = document.createElement("dd");
+      description.textContent = String(value);
+      item.append(term, description);
+      summary.appendChild(item);
+    }
+
+    const modules = elements["acceptance-modules"];
+    modules.replaceChildren();
+    acceptance.modules.forEach((module) => {
+      const item = document.createElement("li");
+      item.className = `acceptance-module is-${module.status.replaceAll("_", "-")}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.addEventListener("click", () => openModule(module.moduleId));
+      const name = document.createElement("strong");
+      name.textContent = module.name;
+      const counts = document.createElement("span");
+      counts.textContent = `${module.satisfied}/${module.plannedChanges} 项完成 · ${module.findingCount} 个问题`;
+      const badge = document.createElement("i");
+      badge.textContent = module.status === "matched" ? "符合计划" : "需要查看";
+      button.append(name, counts, badge);
+      item.appendChild(button);
+      modules.appendChild(item);
+    });
+
+    const findingsPanel = elements["acceptance-findings-panel"];
+    const findings = elements["acceptance-findings"];
+    findings.replaceChildren();
+    findingsPanel.hidden = acceptance.findings.length === 0;
+    acceptance.findings.forEach((finding) => {
+      const item = document.createElement("li");
+      item.className = `acceptance-finding is-${finding.severity}`;
+      const heading = document.createElement("div");
+      const code = document.createElement("code");
+      code.textContent = finding.code;
+      const severity = document.createElement("span");
+      severity.textContent = finding.severity === "error" ? "阻断" : "提醒";
+      heading.append(code, severity);
+      const message = document.createElement("p");
+      message.textContent = finding.message;
+      item.append(heading, message);
+      if (finding.moduleId) appendModuleLinks(item, [finding.moduleId]);
+      findings.appendChild(item);
+    });
+    if (acceptance.truncatedFindings > 0) {
+      const item = document.createElement("li");
+      item.className = "acceptance-finding is-warning";
+      item.textContent = `还有 ${acceptance.truncatedFindings} 个问题未在页面展开，请查看机器可读报告。`;
+      findings.appendChild(item);
+    }
   }
 
   async function fetchRevisions() {
@@ -931,6 +1094,7 @@ import {
   function bindEvents() {
     elements["retry-button"].addEventListener("click", fetchReview);
     elements["refresh-review-button"].addEventListener("click", fetchReview);
+    elements["refresh-acceptance-button"].addEventListener("click", fetchAcceptance);
     elements["revision-history"].addEventListener("toggle", (event) => {
       if (event.currentTarget.open) fetchRevisions();
     });

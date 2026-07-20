@@ -1,0 +1,22 @@
+{
+  "name": "intentcanvas",
+  "owner": {
+    "name": "liuxiaoyu"
+  },
+  "description": "Visual-first code planning, approval, execution gates, and implementation acceptance.",
+  "plugins": [
+    {
+      "name": "intentcanvas",
+      "source": "./",
+      "description": "Review complex code changes visually before implementation and verify Actual against the approved plan.",
+      "license": "Apache-2.0",
+      "category": "development",
+      "tags": [
+        "code-planning",
+        "architecture",
+        "uml",
+        "review"
+      ]
+    }
+  ]
+}

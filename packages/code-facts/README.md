@@ -1,13 +1,19 @@
 # `@intentcanvas/code-facts`
 
-Read-only, dependency-free extraction of deterministic Code Facts v1 for C and
-C++ repositories.
+Dependency-free preparation and deterministic extraction of Code Facts v1 for
+C and C++ repositories.
 
 The package discovers common build-system markers, locates and normalizes an
 existing `compile_commands.json`, and optionally ingests existing clang-uml
-JSON. It never runs a build, compiler, or clang-uml. When semantic tool output
+JSON. The `extract` command never runs a build, compiler, or clang-uml. When semantic tool output
 is absent, it emits an explicit diagnostic and leaves symbols and graph edges
 empty instead of parsing source text heuristically.
+
+The explicit `prepare` command may configure CMake and invoke clang-uml. It
+uses fixed argument vectors without a shell, writes to a private analysis
+directory outside the checkout by default, bounds tool time and output, and
+records an invocation manifest. `prepare --dry-run` prints the exact plan
+without writing or executing anything.
 
 ## JavaScript API
 
@@ -15,6 +21,7 @@ empty instead of parsing source text heuristically.
 import {
   discoverBuildSystems,
   findCompileCommands,
+  prepareCodeFacts,
   readCompileCommands,
   extractCodeFacts,
   inspectCodeFacts
@@ -26,6 +33,10 @@ const facts = await extractCodeFacts("/work/project", {
 });
 
 const summary = inspectCodeFacts(facts);
+
+const prepared = await prepareCodeFacts("/work/project", {
+  dryRun: true
+});
 ```
 
 Useful lower-level APIs include `locateCompilationDatabases`,
@@ -35,6 +46,9 @@ Useful lower-level APIs include `locateCompilationDatabases`,
 ## CLI
 
 ```text
+code-facts prepare [project-root] --dry-run
+code-facts prepare [project-root] --output /tmp/current-facts.json
+
 code-facts extract [project-root] \
   --compile-commands build/compile_commands.json \
   --clang-uml /tmp/diagram.json > /tmp/code-facts.json
@@ -42,6 +56,9 @@ code-facts extract [project-root] \
 code-facts inspect /tmp/code-facts.json
 ```
 
+`prepare` reuses a discovered compilation database or supports automatic CMake
+generation when none exists. clang-uml is optional; without it, the result
+contains compiler/file evidence and an honest semantic-coverage diagnostic.
 `extract` writes to standard output by default. `--output` writes only to the
 explicit path supplied by the caller. `inspect --json` returns a machine-readable
 summary.

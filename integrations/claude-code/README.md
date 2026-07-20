@@ -2,36 +2,41 @@
 
 ## Repository prerequisites
 
-Use Node.js 22 or newer and pnpm 11.9 or newer. From the IntentCanvas checkout, install the workspace dependencies once and start the local Runtime in a terminal that remains open:
+Use Node.js 22 or newer. From the IntentCanvas checkout, run the one-time setup:
 
 ```bash
 cd /absolute/path/to/intentcanvas
-pnpm install
-pnpm dev
+./intentcanvas setup
 ```
 
-The repository packages are not globally installed by `pnpm install`; the root scripts provide the checkout-local commands:
+Setup installs workspace links, a user command, the Claude marketplace/plugin, the Codex Skill, private credentials, and a background Runtime. It is idempotent and never overwrites an unrelated command or Skill. Diagnose the complete local environment with `intentcanvas doctor`.
+
+The unified command surface is:
 
 ```bash
-pnpm intentcanvas status
-pnpm intentcanvas plan validate /path/to/plan.json
-pnpm intentcanvas plan import /path/to/plan.json
-pnpm intentcanvas plan gate <review-id>
-pnpm intentcanvas plan freeze <review-id> /path/to/approved-snapshot.json
-pnpm facts \
-  extract /path/to/project --output /path/to/facts.json
-pnpm diff \
+intentcanvas status
+intentcanvas plan validate /path/to/plan.json
+intentcanvas plan import /path/to/plan.json
+intentcanvas plan gate <review-id>
+intentcanvas plan freeze <review-id> /path/to/approved-snapshot.json
+intentcanvas facts prepare /path/to/project --dry-run
+intentcanvas facts prepare /path/to/project --output /path/to/facts.json
+intentcanvas diff \
   /path/to/approved-snapshot.json /path/to/implemented.json --markdown
-pnpm facts-diff \
+intentcanvas facts-diff \
   /path/to/approved-snapshot.json /path/to/current-facts.json \
   /path/to/implemented-facts.json --markdown
+intentcanvas acceptance facts <review-id> \
+  /path/to/current-facts.json /path/to/implemented-facts.json
 ```
 
 When the packages are installed as command-line tools, the equivalent binaries are `intentcanvas`, `intentcanvas-code-facts`, `intentcanvas-diff`, and `intentcanvas-facts-diff`.
 
 ## Load the plugin
 
-Validate and load this checkout:
+Normal setup registers this checkout as the `intentcanvas` marketplace and installs `intentcanvas@intentcanvas` at user scope. Restart Claude Code or run `/reload-plugins` after the first setup.
+
+For development without installation, validate and load this checkout:
 
 ```bash
 claude plugin validate --strict /absolute/path/to/intentcanvas
@@ -44,7 +49,7 @@ Start a new Claude Code session, then invoke `/intentcanvas:visual-plan` or ask 
 
 Importing or opening a review writes a private per-user workspace binding outside the repository. The synchronous `PreToolUse` Hook checks that review before Edit, Write, mutating Bash/Agent, and mutating MCP tools. While the review is pending or changed, or if Runtime identity/availability cannot be proven, the Hook denies the write. Full approval releases this additional gate but does not bypass Claude Code's normal permission prompt.
 
-If the user explicitly abandons the workflow, they run `pnpm intentcanvas plan detach` themselves from that project. The Hook deliberately prevents the coding agent from detaching or rebinding a pending gate.
+If the user explicitly abandons the workflow, they run `intentcanvas plan detach` themselves from that project. The Hook deliberately prevents the coding agent from detaching or rebinding a pending gate.
 
 Lifecycle event hooks are separate: they run asynchronously and fail open. `INTENTCANVAS_RUNTIME_URL` may be the Runtime origin (`http://127.0.0.1:4317`) or the full `/api/events` endpoint. Both gate and telemetry verify a fresh Runtime challenge before sending the bearer token.
 
@@ -71,26 +76,21 @@ Only allowlisted structural metadata is forwarded. Raw tool input/output, transc
 
 ## tmux and SSH Bridge
 
-For a local tmux workflow, keep the Runtime in its own session and run Claude Code in another pane or terminal:
-
-```bash
-tmux new-session -s intentcanvas-runtime \
-  'cd /absolute/path/to/intentcanvas && pnpm dev'
-```
+For a local tmux workflow, `intentcanvas setup` starts Runtime in the background and later workflow commands restart it automatically if needed.
 
 Inspect the current SSH/tmux context and ask the Runtime for a fresh one-use local review link:
 
 ```bash
-pnpm bridge environment
-pnpm intentcanvas plan open <review-id>
+intentcanvas bridge environment
+intentcanvas plan open <review-id>
 ```
 
 When the Runtime is on an SSH host, run the Bridge on the local client and keep it open:
 
 ```bash
-pnpm bridge \
+intentcanvas bridge \
   ssh <user@remote-host> --review <review-id> \
   --remote-port 4317
 ```
 
-After it reports the same-port tunnel ready, run `pnpm intentcanvas plan open <review-id>` inside the remote Claude/tmux session and click the fresh URL printed there. The link works once and expires after 60 seconds; rerun the command when needed. The installed `@intentcanvas/bridge` package exposes the same commands as `intentcanvas-bridge`. Never run its `ssh` subcommand inside the remote SSH session; a remote process cannot create the required client-local listener.
+After it reports the same-port tunnel ready, run `intentcanvas plan open <review-id>` inside the remote Claude/tmux session and click the fresh URL printed there. The link works once and expires after 60 seconds; rerun the command when needed. Never run the Bridge `ssh` subcommand inside the remote SSH session; a remote process cannot create the required client-local listener.

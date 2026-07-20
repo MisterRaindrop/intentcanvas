@@ -450,7 +450,7 @@ export async function readClangUmlJson(path, options = {}) {
   let canonicalPath;
   try {
     canonicalPath = await resolveContainedRegularPath(
-      options.projectRoot ?? dirname(absolutePath),
+      options.analysisRoot ?? options.projectRoot ?? dirname(absolutePath),
       absolutePath
     );
     text = await readBoundedRegularFile(canonicalPath, {

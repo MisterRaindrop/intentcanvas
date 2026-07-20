@@ -2,7 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createTdePlanFixture } from "@intentcanvas/protocol";
+import { createAcceptanceRecord } from "../src/acceptance.js";
 import { ReviewStore, ReviewStoreError } from "../src/review-store.js";
+
+function approveAll(store, reviewId = "doris-tde-demo") {
+  let revision = store.getCurrentRevision(reviewId);
+  for (const module of store.getReview(reviewId).modules) {
+    revision = store.submitDecision(reviewId, {
+      moduleId: module.id,
+      decision: "approved",
+      expectedRevision: revision
+    }).revision;
+  }
+  return revision;
+}
 
 test("ReviewStore keeps its own plan copy and returns defensive copies", () => {
   const plan = createTdePlanFixture();
@@ -135,6 +148,28 @@ test("ReviewStore rejects replayed decisions and exposes a fail-closed execution
   assert.equal(snapshot.plan.status, "approved");
   assert.equal(snapshot.revision, revision);
   assert.match(snapshot.planDigest, /^sha256:[a-f0-9]{64}$/u);
+});
+
+test("ReviewStore persists acceptance for one approved revision and invalidates it on change", () => {
+  const store = new ReviewStore([createTdePlanFixture()]);
+  const revision = approveAll(store);
+  const snapshot = store.getApprovedSnapshot("doris-tde-demo");
+  const implemented = structuredClone(snapshot.plan);
+  implemented.status = "implemented";
+  const record = createAcceptanceRecord(snapshot, { mode: "model", implemented });
+
+  assert.equal(store.recordAcceptance("doris-tde-demo", record).status, "pass");
+  assert.equal(store.getAcceptance("doris-tde-demo").approvedRevision, revision);
+  const restored = ReviewStore.fromState(store.exportState());
+  assert.equal(restored.getAcceptance("doris-tde-demo").status, "pass");
+
+  store.submitDecision("doris-tde-demo", {
+    moduleId: store.getReview("doris-tde-demo").modules[0].id,
+    decision: "changes_requested",
+    comment: "re-open this module",
+    expectedRevision: revision
+  });
+  assert.equal(store.getAcceptance("doris-tde-demo"), null);
 });
 
 test("ReviewStore reports unknown reviews and modules", () => {

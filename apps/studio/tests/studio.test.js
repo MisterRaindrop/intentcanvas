@@ -106,6 +106,14 @@ test("studio loads its browser code as modules", async () => {
   assert.match(html, /<script src="\.\/app\.js" type="module"><\/script>/);
 });
 
+test("acceptance links scroll directly to the rendered acceptance section", async () => {
+  const script = await readStudioFile("app.js");
+
+  assert.match(script, /openOverview\(\{ updateHash: false, scrollTop: false \}\)/);
+  assert.match(script, /scrollIntoView\(\{ behavior: "auto", block: "start" \}\)/);
+  assert.match(script, /renderAcceptance\(\);\s*scrollToAcceptance\(\);/);
+});
+
 test("change colors and approval colors use separate semantics", async () => {
   const css = await readStudioFile("styles.css");
 

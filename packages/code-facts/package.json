@@ -1,6 +1,6 @@
 {
   "name": "@intentcanvas/code-facts",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Deterministic, read-only C/C++ code fact extraction for IntentCanvas.",
   "license": "Apache-2.0",
   "type": "module",

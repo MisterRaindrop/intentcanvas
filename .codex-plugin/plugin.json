@@ -1,6 +1,6 @@
 {
   "name": "intentcanvas",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Visual-first planning, approval, and plan-versus-actual review for AI-assisted code changes.",
   "author": {
     "name": "liuxiaoyu",

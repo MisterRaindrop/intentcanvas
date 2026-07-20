@@ -22,6 +22,9 @@ importers:
       '@intentcanvas/local-auth':
         specifier: workspace:*
         version: link:../../packages/local-auth
+      '@intentcanvas/plan-diff':
+        specifier: workspace:*
+        version: link:../../packages/plan-diff
       '@intentcanvas/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

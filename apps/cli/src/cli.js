@@ -11,13 +11,16 @@ import {
 import {
   PLAN_SCHEMA_VERSION,
   validateApprovedSnapshot,
+  validateCodeFacts,
   validatePlanModel
 } from "@intentcanvas/protocol";
 
-export const CLI_VERSION = "0.2.0";
+export const CLI_VERSION = "0.3.0";
 export const DEFAULT_RUNTIME_URL = "http://127.0.0.1:4317";
 export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
+export const MAX_DOCUMENT_BYTES = 64 * 1024 * 1024;
+export const ACCEPTANCE_REQUEST_TIMEOUT_MS = 120_000;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const OPAQUE_HANDOFF = /^[A-Za-z0-9_-]{43}$/u;
 
@@ -34,6 +37,8 @@ Usage:
   intentcanvas plan gate <review-id> [--runtime URL]
   intentcanvas plan open <review-id> [--runtime URL]
   intentcanvas plan revise <review-id> <module-id> <module-file|-> [--runtime URL]
+  intentcanvas acceptance model <review-id> <implemented.json|-> [--runtime URL]
+  intentcanvas acceptance facts <review-id> <current-facts.json> <implemented-facts.json> [--runtime URL]
 
 Use '-' to read JSON from standard input or write JSON to standard output.
 `;
@@ -170,7 +175,18 @@ function parseOptions(argv, env) {
 
 async function defaultReadStdin() {
   const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const bytes = Buffer.from(chunk);
+    size += bytes.length;
+    if (size > MAX_DOCUMENT_BYTES) {
+      throw new CliError(
+        "document_too_large",
+        `Input exceeds ${MAX_DOCUMENT_BYTES} bytes`
+      );
+    }
+    chunks.push(bytes);
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 
@@ -178,6 +194,12 @@ async function readDocument(path, dependencies) {
   const source = path === "-"
     ? await dependencies.readStdin()
     : await dependencies.readFile(path, "utf8");
+  if (Buffer.byteLength(source) > MAX_DOCUMENT_BYTES) {
+    throw new CliError(
+      "document_too_large",
+      `Input exceeds ${MAX_DOCUMENT_BYTES} bytes`
+    );
+  }
   return parseJsonDocument(source);
 }
 
@@ -199,6 +221,16 @@ function assertSnapshot(snapshot) {
     });
   }
   return snapshot;
+}
+
+function assertFacts(facts) {
+  const validation = validateCodeFacts(facts);
+  if (!validation.valid) {
+    throw new CliError("invalid_code_facts", "Code Facts validation failed", {
+      details: validation.errors
+    });
+  }
+  return facts;
 }
 
 async function writeJsonDocument(path, value, dependencies) {
@@ -372,8 +404,10 @@ function requireArguments(args, count, usage) {
   }
 }
 
-function printReviewLink(stdout, runtime, reviewId, handoff) {
-  const url = reviewUrl(runtime, reviewId, handoff);
+function printReviewLink(stdout, runtime, reviewId, handoff, { fragment } = {}) {
+  const parsed = new URL(reviewUrl(runtime, reviewId, handoff));
+  if (fragment) parsed.hash = fragment;
+  const url = parsed.href;
   writeLine(stdout, `Review URL: ${url}`);
   writeLine(stdout, osc8Hyperlink("Open visual plan", url));
 }
@@ -453,7 +487,7 @@ export async function runCli(argv, overrides = {}) {
       return 0;
     }
 
-    if (args[0] !== "plan") {
+    if (!["plan", "acceptance"].includes(args[0])) {
       throw new CliError("unknown_command", "Unknown command. Run intentcanvas --help", {
         exitCode: 2
       });
@@ -498,6 +532,85 @@ export async function runCli(argv, overrides = {}) {
       accessToken,
       dependencies.requestOptions
     );
+
+    if (args[0] === "acceptance") {
+      const action = args[1];
+      let body;
+      let reviewId;
+      if (action === "model") {
+        requireArguments(
+          args,
+          4,
+          "intentcanvas acceptance model <review-id> <implemented.json|-> [--runtime URL]"
+        );
+        reviewId = safeIdentifier(args[2], "review id");
+        body = {
+          mode: "model",
+          implemented: assertPlan(await readDocument(args[3], dependencies))
+        };
+      } else if (action === "facts") {
+        requireArguments(
+          args,
+          5,
+          "intentcanvas acceptance facts <review-id> <current-facts.json> <implemented-facts.json> [--runtime URL]"
+        );
+        reviewId = safeIdentifier(args[2], "review id");
+        if (args[3] === "-" || args[4] === "-") {
+          throw new CliError(
+            "invalid_arguments",
+            "Facts acceptance requires two file paths; standard input cannot represent both documents",
+            { exitCode: 2 }
+          );
+        }
+        body = {
+          mode: "facts",
+          current: assertFacts(await readDocument(args[3], dependencies)),
+          implemented: assertFacts(await readDocument(args[4], dependencies))
+        };
+      } else {
+        throw new CliError(
+          "unknown_command",
+          "Unknown acceptance command. Run intentcanvas --help",
+          { exitCode: 2 }
+        );
+      }
+      const result = await requestJson(
+        dependencies.fetch,
+        `${runtime}/api/reviews/${encodeURIComponent(reviewId)}/acceptance`,
+        accessToken,
+        { method: "POST", body: JSON.stringify(body) },
+        {
+          ...dependencies.requestOptions,
+          timeoutMs: Math.max(
+            dependencies.requestOptions.timeoutMs,
+            ACCEPTANCE_REQUEST_TIMEOUT_MS
+          )
+        }
+      );
+      if (result.kind !== "IntentCanvasAcceptanceRecord" ||
+          result.reviewId !== reviewId ||
+          !["pass", "incomplete", "review_required"].includes(result.status)) {
+        throw new CliError("invalid_runtime_response", "Runtime returned an invalid acceptance result");
+      }
+      writeLine(dependencies.stdout, JSON.stringify({
+        ok: result.status === "pass",
+        reviewId,
+        status: result.status,
+        approvedRevision: result.approvedRevision,
+        summary: result.summary
+      }));
+      const handoff = await createBrowserHandoff(
+        dependencies.fetch,
+        runtime,
+        accessToken,
+        reviewId,
+        dependencies.requestOptions
+      );
+      printReviewLink(dependencies.stdout, runtime, reviewId, handoff, {
+        fragment: "acceptance"
+      });
+      return result.status === "pass" ? 0 : 4;
+    }
 
     if (action === "import") {
       requireArguments(args, 3, "intentcanvas plan import <file|-> [--runtime URL]");

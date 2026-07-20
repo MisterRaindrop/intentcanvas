@@ -19,7 +19,8 @@ const SAFE_AGENT_TYPES = new Set(["Explore", "Plan"]);
 const MUTATION_NAME = /(?:^|__|_)(?:apply|commit|create|delete|deploy|edit|merge|move|patch|publish|push|remove|rename|send|update|upload|write)(?:__|_|$)/iu;
 const SAFE_SHELL_PREFIX = /^(?:cat|clang-uml|cmake|ctest|find|git\s+(?:diff|grep|log|ls-files|rev-parse|show|status)|grep|head|ls|make|ninja|pnpm\s+(?:check|facts|facts-diff|intentcanvas|test)|pwd|rg|sed\s+-n|stat|tail|wc)\b/u;
 const BUNDLED_PLANNING_TOOL = /^node\s+["']?(?:[^"'\r\n]*[/\\])?(?:intentcanvas|code-facts|plan-diff|facts-diff)\.mjs["']?(?:\s|$)/u;
-const WORKSPACE_REBIND_COMMAND = /(?:pnpm\s+intentcanvas|intentcanvas\.mjs)["']?\s+plan\s+(?:detach|import|open)\b/u;
+const INSTALLED_PLANNING_TOOL = /^(?:node\s+["']?(?:\.\/)?intentcanvas["']?|(?:\.\/)?intentcanvas)\s+(?:doctor\b|status\b|facts(?:\s|$)|diff(?:\s|$)|facts-diff(?:\s|$)|plan\s+(?:validate|get|replace|freeze|gate|revise)\b)/u;
+const WORKSPACE_REBIND_COMMAND = /(?:pnpm\s+intentcanvas|intentcanvas\.mjs|(?:^|\s)(?:\.\/)?intentcanvas)["']?\s+plan\s+(?:detach|import|open)\b/u;
 const SHELL_MUTATION = /(?:^|[;&|]\s*)(?:cp|dd|git\s+(?:add|cherry-pick|commit|merge|push|rebase|reset|restore|switch)|install|mkdir|mv|rm|rmdir|tee|touch|truncate)\b|(?:^|\s)(?:>|>>)(?:\s|$)|\bsed\s+-i\b|\bperl\s+-pi\b/iu;
 
 function hasShellComposition(command) {
@@ -62,7 +63,9 @@ export function toolCanWrite(input) {
     if (SHELL_MUTATION.test(command)) return true;
     if (WORKSPACE_REBIND_COMMAND.test(command)) return true;
     if (hasShellComposition(command)) return true;
-    return !SAFE_SHELL_PREFIX.test(command) && !BUNDLED_PLANNING_TOOL.test(command);
+    return !SAFE_SHELL_PREFIX.test(command) &&
+      !BUNDLED_PLANNING_TOOL.test(command) &&
+      !INSTALLED_PLANNING_TOOL.test(command);
   }
   if (toolName.startsWith("mcp__")) return MUTATION_NAME.test(toolName);
   return false;

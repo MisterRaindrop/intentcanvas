@@ -301,6 +301,44 @@ test("revises one module through encoded API path", async () => {
   assert.equal(requests[2].url, `${DEFAULT_RUNTIME_URL}/api/handoffs`);
 });
 
+test("publishes acceptance evidence and prints a direct Studio acceptance link", async () => {
+  const implemented = approvedPlan();
+  implemented.status = "implemented";
+  const requests = [];
+  const context = dependencies({
+    readFile: async () => JSON.stringify(implemented),
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      if (url.endsWith("/api/handoffs")) {
+        return response(201, { reviewId: implemented.id, handoff: HANDOFF });
+      }
+      return response(201, {
+        schemaVersion: "1.0.0",
+        kind: "IntentCanvasAcceptanceRecord",
+        reviewId: implemented.id,
+        approvedRevision: 8,
+        status: "pass",
+        summary: { totalFindings: 0 }
+      });
+    }
+  });
+
+  const exitCode = await runCli(
+    ["acceptance", "model", implemented.id, "implemented.json"],
+    context.values
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(
+    requests[0].url,
+    `${DEFAULT_RUNTIME_URL}/api/reviews/${implemented.id}/acceptance`
+  );
+  assert.equal(JSON.parse(requests[0].options.body).mode, "model");
+  assert.equal(JSON.parse(requests[0].options.body).implemented.status, "implemented");
+  assert.match(context.stdout.read(), /#acceptance/u);
+  assert.match(context.stdout.read(), /"status":"pass"/u);
+});
+
 test("checks Runtime health and preserves structured server errors", async () => {
   const healthy = dependencies({
     fetch: async () => response(200, { status: "ok", service: "intentcanvas-runtime" })

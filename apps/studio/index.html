@@ -119,6 +119,41 @@
             <ol id="verification-list" class="evidence-list verification-list"></ol>
           </article>
         </section>
+
+        <section id="acceptance" class="overview-section acceptance-section" aria-labelledby="acceptance-title">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">05 · 实现是否跑偏</p>
+              <h2 id="acceptance-title">Plan 与 Actual 验收</h2>
+              <p>实现完成后，把真实代码证据与批准版本比较；这里只保留便于人工审核的结果。</p>
+            </div>
+            <button id="refresh-acceptance-button" class="button button-ghost" type="button">刷新验收结果</button>
+          </div>
+          <p id="acceptance-message" class="acceptance-message" aria-live="polite">正在读取验收结果……</p>
+          <div id="acceptance-empty" class="acceptance-empty" hidden>
+            <strong>还没有执行实现验收</strong>
+            <p>所有模块批准并完成开发后，IntentCanvas 会在这里显示计划内修改、缺失项和计划外修改。</p>
+          </div>
+          <div id="acceptance-report" class="acceptance-report" hidden>
+            <div class="acceptance-result-row">
+              <div>
+                <span id="acceptance-status" class="acceptance-status"></span>
+                <strong id="acceptance-result-title"></strong>
+                <p id="acceptance-result-copy"></p>
+              </div>
+              <time id="acceptance-generated-at"></time>
+            </div>
+            <dl id="acceptance-summary" class="acceptance-summary"></dl>
+            <div>
+              <h3>逐模块结果</h3>
+              <ol id="acceptance-modules" class="acceptance-modules"></ol>
+            </div>
+            <details id="acceptance-findings-panel" class="acceptance-findings-panel">
+              <summary>查看需要处理的问题</summary>
+              <ol id="acceptance-findings" class="acceptance-findings"></ol>
+            </details>
+          </div>
+        </section>
       </section>
 
       <section id="module-view" class="page" hidden aria-labelledby="module-title">

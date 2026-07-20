@@ -53,3 +53,12 @@ export {
 } from "./source-inventory.js";
 
 export { discoverGitIdentity } from "./git-identity.js";
+
+export {
+  EvidencePreparationError,
+  PREPARATION_DEFAULT_TIMEOUT_MS,
+  createClangUmlConfig,
+  defaultEvidenceDirectory,
+  planEvidencePreparation,
+  prepareCodeFacts
+} from "./prepare.js";

@@ -1,6 +1,6 @@
 {
   "name": "@intentcanvas/plan-diff",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Compare approved IntentCanvas plans with proposed models or before-and-after Code Facts.",
   "license": "Apache-2.0",
   "type": "module",

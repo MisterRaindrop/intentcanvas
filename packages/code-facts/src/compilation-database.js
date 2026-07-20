@@ -321,13 +321,17 @@ export async function findCompileCommands(projectRoot, options) {
 export const findCompileCommandsFiles = locateCompilationDatabases;
 
 /** Read and normalize every command in a compilation database. */
-export async function readCompileCommands(path, { projectRoot } = {}) {
+export async function readCompileCommands(path, { projectRoot, databaseRoot } = {}) {
   const databasePath = resolve(path);
   const root = await realpath(resolve(projectRoot ?? dirname(databasePath)));
+  const trustedDatabaseRoot = await realpath(resolve(databaseRoot ?? root));
   let parsed;
   let canonicalDatabasePath;
   try {
-    canonicalDatabasePath = await resolveContainedRegularPath(root, databasePath);
+    canonicalDatabasePath = await resolveContainedRegularPath(
+      trustedDatabaseRoot,
+      databasePath
+    );
     const text = (await readBoundedRegularFile(canonicalDatabasePath, {
       maxBytes: MAX_ANALYSIS_INPUT_BYTES,
       encoding: "utf8"

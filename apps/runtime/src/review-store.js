@@ -6,6 +6,7 @@ import {
   validateApprovalDecision,
   validatePlanModel
 } from "@intentcanvas/protocol";
+import { assertAcceptanceRecord } from "./acceptance.js";
 
 export const RUNTIME_STATE_KIND = "IntentCanvasRuntimeState";
 export const RUNTIME_STATE_VERSION = 1;
@@ -97,6 +98,7 @@ export class ReviewStore {
   #reviews = new Map();
   #revisions = new Map();
   #events = [];
+  #acceptances = new Map();
   #eventLimit;
   #revisionLimit;
 
@@ -286,7 +288,8 @@ export class ReviewStore {
         pendingModules: review.modules.filter(
           (module) => module.approval.decision === "pending"
         ).length,
-        revision: this.getCurrentRevision(review.id)
+        revision: this.getCurrentRevision(review.id),
+        acceptanceStatus: this.#acceptances.get(review.id)?.status ?? null
       }));
   }
 
@@ -341,6 +344,62 @@ export class ReviewStore {
       revision: record.revision,
       frozenAt: record.createdAt
     });
+  }
+
+  getAcceptance(reviewId) {
+    if (!this.#reviews.has(reviewId)) {
+      throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
+        code: "review_not_found",
+        status: 404
+      });
+    }
+    const record = this.#acceptances.get(reviewId);
+    return record ? structuredClone(record) : null;
+  }
+
+  recordAcceptance(reviewId, input) {
+    if (!this.#reviews.has(reviewId)) {
+      throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
+        code: "review_not_found",
+        status: 404
+      });
+    }
+    let record;
+    try {
+      record = assertAcceptanceRecord(input);
+    } catch (error) {
+      throw new ReviewStoreError(`Invalid acceptance record: ${error.message}`, {
+        code: "invalid_acceptance_record",
+        status: 400
+      });
+    }
+    const gate = this.getExecutionGate(reviewId);
+    if (record.reviewId !== reviewId || !gate.allowed ||
+        record.approvedRevision !== gate.revision) {
+      throw new ReviewStoreError(
+        "Acceptance evidence does not match the current fully approved revision",
+        {
+          code: "acceptance_revision_mismatch",
+          status: 409,
+          details: [{
+            path: "$.approvedRevision",
+            message: "freeze and verify the current approved revision again",
+            code: "revision_mismatch",
+            expectedRevision: gate.revision,
+            actualRevision: record.approvedRevision
+          }]
+        }
+      );
+    }
+    const knownModules = new Set(this.#reviews.get(reviewId).modules.map((module) => module.id));
+    if (record.modules.some((module) => !knownModules.has(module.moduleId))) {
+      throw new ReviewStoreError("Acceptance record contains an unknown module", {
+        code: "invalid_acceptance_record",
+        status: 400
+      });
+    }
+    this.#acceptances.set(reviewId, record);
+    return structuredClone(record);
   }
 
   listRevisions(reviewId) {
@@ -476,7 +535,8 @@ export class ReviewStore {
       revisions: [...this.#revisions.values()]
         .flat()
         .map((revision) => structuredClone(revision)),
-      events: structuredClone(this.#events)
+      events: structuredClone(this.#events),
+      acceptances: [...this.#acceptances.values()].map((record) => structuredClone(record))
     };
   }
 
@@ -500,11 +560,16 @@ export class ReviewStore {
       });
     }
     if (!Array.isArray(state.reviews) || !Array.isArray(state.revisions) ||
-        !Array.isArray(state.events)) {
+        !Array.isArray(state.events) ||
+        !(state.acceptances === undefined || Array.isArray(state.acceptances))) {
       throw new ReviewStoreError("Invalid persisted Runtime state", {
         code: "invalid_runtime_state",
         status: 500,
-        details: [{ path: "$", message: "reviews, revisions, and events must be arrays", code: "invalid_type" }]
+        details: [{
+          path: "$",
+          message: "reviews, revisions, events, and optional acceptances must be arrays",
+          code: "invalid_type"
+        }]
       });
     }
 
@@ -592,13 +657,42 @@ export class ReviewStore {
       events.splice(0, events.length - this.#eventLimit);
     }
 
+    const acceptances = new Map();
+    for (const input of state.acceptances ?? []) {
+      let record;
+      try {
+        record = assertAcceptanceRecord(input);
+      } catch (error) {
+        throw new ReviewStoreError(`Invalid acceptance in persisted Runtime state: ${error.message}`, {
+          code: "invalid_runtime_state",
+          status: 500
+        });
+      }
+      const review = reviews.get(record.reviewId);
+      const history = revisions.get(record.reviewId);
+      const currentRevision = history?.at(-1)?.revision;
+      if (!review || record.approvedRevision !== currentRevision ||
+          review.status !== "approved" ||
+          record.modules.some((module) => !review.modules.some(
+            (candidate) => candidate.id === module.moduleId
+          )) || acceptances.has(record.reviewId)) {
+        throw new ReviewStoreError("Acceptance does not match persisted review state", {
+          code: "invalid_runtime_state",
+          status: 500
+        });
+      }
+      acceptances.set(record.reviewId, record);
+    }
+
     this.#reviews = reviews;
     this.#revisions = revisions;
     this.#events = events;
+    this.#acceptances = acceptances;
   }
 
   #appendRevision(reviewId, plan, { operation, createdAt, moduleId } = {}) {
     this.#assertRevisionCapacity(reviewId);
+    this.#acceptances.delete(reviewId);
     const history = this.#revisions.get(reviewId) ?? [];
     const record = {
       reviewId,

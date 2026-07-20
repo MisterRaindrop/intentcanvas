@@ -3,10 +3,56 @@ import test from "node:test";
 
 import {
   DEFAULT_REVIEW_ID,
+  normalizeAcceptanceResponse,
   normalizeDecisionResponse,
   normalizeReview,
   reviewIdFromSearch
 } from "../review-model.js";
+
+function acceptanceResponse() {
+  return {
+    reviewId: "review-1",
+    acceptance: {
+      schemaVersion: "1.0.0",
+      kind: "IntentCanvasAcceptanceRecord",
+      reviewId: "review-1",
+      approvedRevision: 8,
+      generatedAt: "2026-07-20T01:00:00.000Z",
+      sourceKind: "facts",
+      reportKind: "IntentCanvasFactsAuditReport",
+      status: "review_required",
+      summary: {
+        totalFindings: 1,
+        errors: 1,
+        warnings: 0,
+        plannedChanges: 1,
+        satisfied: 1,
+        incomplete: 0,
+        unapproved: 1,
+        evidenceIssues: 0
+      },
+      modules: [{
+        moduleId: "storage",
+        name: "存储层",
+        status: "review_required",
+        plannedChanges: 1,
+        satisfied: 1,
+        findingCount: 1
+      }],
+      findings: [{
+        code: "unapproved_file_change",
+        category: "unapproved",
+        severity: "error",
+        path: "/facts/files/helper.cpp",
+        message: "计划外文件发生变化",
+        moduleId: "storage"
+      }],
+      truncatedFindings: 0,
+      digests: {},
+      assurance: "structural_code_facts"
+    }
+  };
+}
 
 function validPlan() {
   return {
@@ -137,5 +183,40 @@ test("incomplete or cross-module decision responses are rejected", () => {
   assert.throws(
     () => normalizeDecisionResponse(response, { expectedModuleId: "storage" }),
     /decisionResponse\.revision/
+  );
+});
+
+test("acceptance summaries are validated before Studio renders them", () => {
+  const input = acceptanceResponse();
+  const normalized = normalizeAcceptanceResponse(input, {
+    expectedReviewId: "review-1",
+    expectedModuleIds: ["storage"]
+  });
+  assert.deepEqual(normalized, input);
+  assert.notEqual(normalized.acceptance, input.acceptance);
+
+  const empty = normalizeAcceptanceResponse({
+    reviewId: "review-1",
+    acceptance: null
+  }, { expectedReviewId: "review-1" });
+  assert.equal(empty.acceptance, null);
+});
+
+test("acceptance summaries cannot reference another review or module", () => {
+  const wrongReview = acceptanceResponse();
+  wrongReview.acceptance.reviewId = "other";
+  assert.throws(
+    () => normalizeAcceptanceResponse(wrongReview, { expectedReviewId: "review-1" }),
+    /reviewId/u
+  );
+
+  const wrongModule = acceptanceResponse();
+  wrongModule.acceptance.modules[0].moduleId = "unknown";
+  assert.throws(
+    () => normalizeAcceptanceResponse(wrongModule, {
+      expectedReviewId: "review-1",
+      expectedModuleIds: ["storage"]
+    }),
+    /不是当前计划模块/u
   );
 });

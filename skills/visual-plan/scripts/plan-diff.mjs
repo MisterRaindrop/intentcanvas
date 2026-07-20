@@ -1,3 +1,5 @@
 #!/usr/bin/env node
 
-await import("../../../packages/plan-diff/src/bin.js");
+import { dispatch } from "./dispatch.mjs";
+
+process.exitCode = await dispatch(["diff", ...process.argv.slice(2)]);

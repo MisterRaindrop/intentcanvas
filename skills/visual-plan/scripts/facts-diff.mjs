@@ -1,3 +1,5 @@
 #!/usr/bin/env node
 
-await import("../../../packages/plan-diff/src/facts-bin.js");
+import { dispatch } from "./dispatch.mjs";
+
+process.exitCode = await dispatch(["facts-diff", ...process.argv.slice(2)]);

@@ -31,6 +31,10 @@ test("identifies Claude write surfaces while allowing bounded planning commands"
   assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "rg \"$(touch changed)\" src" } }), true);
   assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "pnpm intentcanvas plan open review-1" } }), true);
   assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "pnpm intentcanvas plan detach" } }), true);
+  assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "./intentcanvas plan open review-1" } }), true);
+  assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "./intentcanvas plan revise review-1 core module.json" } }), false);
+  assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "intentcanvas facts prepare . --dry-run" } }), false);
+  assert.equal(toolCanWrite({ tool_name: "Bash", tool_input: { command: "intentcanvas setup" } }), true);
   assert.equal(toolCanWrite({
     tool_name: "Bash",
     tool_input: { command: "node /plugin/skills/visual-plan/scripts/intentcanvas.mjs plan revise review-1 core module.json" }
