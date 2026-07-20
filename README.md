@@ -1,177 +1,307 @@
 # IntentCanvas
 
-IntentCanvas turns an AI coding plan into a visual contract that a human can review module by module before implementation, then checks the implementation against the approved design.
+[![Release](https://img.shields.io/github/v/release/MisterRaindrop/intentcanvas?display_name=tag)](https://github.com/MisterRaindrop/intentcanvas/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](package.json)
 
-> Draw the intent. Approve the change. Verify the result.
+**Visual plans that humans can review before AI writes code.**
 
-It is aimed at changes that are hard to judge from prose alone: large C/C++ systems, database kernels, distributed systems, cross-module features, and structural refactors.
+IntentCanvas turns an AI-generated coding plan into a visual contract: review the architecture, inspect one module at a time, approve the exact design, and compare the implementation with that approved plan.
 
-## What works in v0.3
+> See the intent. Approve the change. Verify the result.
 
-- A strict, versioned Plan Model and a Doris TDE example.
-- A visual Studio with a top-level module graph, one-line module summaries, simplified module diagrams, focused call paths, member changes, pseudocode, risks, and checks.
-- Previous/next module navigation, module-level approval, targeted feedback, and single-module replanning without regenerating the whole design.
-- A loopback-only Runtime with atomic persistent storage, decision-inclusive revision history, event ingestion, an execution gate, and revision-bound Approved Snapshots.
-- A terminal CLI that validates, imports, gets, replaces, revises, checks/finalizes approval, and prints OSC8 clickable review links.
-- Deterministic C/C++ Code Facts ingestion plus `facts prepare`: reuse existing build evidence or safely configure CMake in a private analysis directory, generate a bounded clang-uml config, run tools without a shell, and retain an audit manifest.
-- Approved-Snapshot-versus-Implemented model and direct before/after Code Facts drift reports, including project identity and concrete include authorization.
-- A Plan-versus-Actual acceptance view in Studio with an overall result, compact evidence counts, per-module status, and clickable findings. Runtime computes the report against its own approved revision and invalidates it whenever the plan changes.
-- A safe SSH/tmux Bridge that creates a same-port loopback forward on the local client; the remote CLI prints the authenticated clickable URL.
-- A repository launcher with one-command setup, background Runtime start/stop, `doctor`, a user command link, Claude marketplace installation, and Codex Skill linking.
-- Claude Code and Codex packaging through the shared `visual-plan` Skill, plus a synchronous fail-closed Claude write gate for bound reviews and separate fail-open lifecycle telemetry.
+[简体中文](README.zh-CN.md) · [Quick start](#quick-start) · [Workflow](#the-review-workflow) · [Remote tmux](#tmux-ssh-and-clickable-links) · [Roadmap](docs/roadmap.md)
 
-The governing rule is:
+IntentCanvas is designed for changes that are difficult to judge from prose alone: large C/C++ systems, database kernels, distributed systems, cross-module features, and structural refactors.
+
+## Why IntentCanvas
+
+An ordinary AI plan asks you to read several pages of text and reconstruct the design in your head. For a feature such as transparent data encryption in a database, that makes it hard to answer basic review questions:
+
+- Which modules will change?
+- Where does the new abstraction enter the call path?
+- Which classes, methods, and dependencies are added or removed?
+- Did the implementation introduce unapproved work?
+
+IntentCanvas presents the same change at three review levels:
+
+| Review level | What you see | What you decide |
+| --- | --- | --- |
+| System overview | Changed modules, relationships, and one plain-language sentence per module | Is the overall scope and architecture reasonable? |
+| One module | Simplified UML, entry points, focused call paths, member changes, pseudocode, risks, and checks | Is this module going to change in the right place and in the right way? |
+| Acceptance | Plan-versus-Actual status, missing work, unapproved drift, and evidence gaps | Did the implementation stay inside the approved design? |
+
+Large features remain readable because the overview never tries to render the entire repository. Enter one module, review a bounded amount of information, then use **Previous module**, **Next module**, or **Back to overview**.
+
+A focused path can look like this:
+
+```text
+DeltaWriterV2::init()
+    └── … 3 unchanged calls (click to expand)
+        └── RowsetWriterContext::fs()                 modified
+            └── EncryptedOutputStream                 added
+```
+
+If one module needs adjustment, only that complete module is regenerated. Approvals for untouched modules remain valid.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A["Code facts"] --> B["Proposed visual plan"]
+    B --> C["HTML review"]
+    C --> D{"Approved?"}
+    D -- "Revise one module" --> B
+    D -- "Yes" --> E["Revision-bound snapshot"]
+    E --> F["Implementation"]
+    F --> G["Fresh code facts"]
+    G --> H["Plan vs Actual"]
+    H --> C
+```
+
+The core rule is simple:
 
 ```text
 code facts come from analysis tools
 design decisions come from the model
-implementation starts only after Runtime approval
+implementation starts only after approval
 actual implementation is checked against the approved contract
 ```
 
-## First five minutes
+## Quick start
 
-Requirement: Node.js 22+. Corepack or pnpm is used automatically during setup.
+### 1. Install
+
+Requirements:
+
+- Node.js 22 or newer
+- Corepack or pnpm
+- Claude Code and/or Codex if you want the agent integration
+- `clang-uml` is optional but recommended for C/C++ structural evidence
 
 ```bash
 git clone https://github.com/MisterRaindrop/intentcanvas.git
 cd intentcanvas
 ./intentcanvas setup
+./intentcanvas doctor
 ```
 
-Setup installs workspace links, creates private local credentials, starts Runtime in the background, links the `visual-plan` Codex Skill, registers the local Claude marketplace when Claude Code is present, and places an `intentcanvas` command under `~/.local/bin`. It never overwrites an unrelated command or Skill. Run `./intentcanvas doctor` for one JSON diagnosis.
+Setup is idempotent. It installs workspace dependencies, creates private local credentials, starts the loopback Runtime, links the Codex Skill, registers the Claude marketplace when Claude Code is available, and creates `~/.local/bin/intentcanvas` without replacing an unrelated command or Skill.
 
-The Runtime and CLI print clickable terminal links. In iTerm2 and other OSC8-capable terminals, click one directly. Each link contains a random handoff that expires after 60 seconds and works once; run `intentcanvas plan open doris-tde-demo` whenever you need a fresh link. A bare `?review=...` URL deliberately cannot open a new browser session.
+The examples below use `intentcanvas`. If `~/.local/bin` is not on your `PATH`, use `./intentcanvas` from the checkout instead.
 
-With normal setup, state is stored atomically under `~/.intentcanvas/runtime/state.json` (or `INTENTCANVAS_DATA_DIR`); restarting the Runtime keeps plans, approvals, decision revisions, events, and acceptance results. Decision and structure updates carry revision preconditions, so a concurrent review mutation between client preflight and commit is rejected. One process owns a data directory at a time, and each review retains at most 100 snapshots.
+### 2. Ask for a visual plan
 
-## Use it for a real change
+In Claude Code:
 
-The launcher starts Runtime automatically for networked workflow commands. Validate and import the JSON plan produced by the Skill:
+```text
+/intentcanvas:visual-plan
+```
+
+In Codex:
+
+```text
+$visual-plan
+```
+
+Then describe the change normally, for example:
+
+```text
+Add transparent data encryption to the storage layer. Show me the visual plan before editing code.
+```
+
+### 3. Click the review link
+
+The terminal prints an OSC8 hyperlink. In iTerm2 and other compatible terminals, click it to open the local HTML review. Review the overall graph, enter each module, request targeted changes or approve it, and return to the terminal when the plan is ready.
+
+The browser handoff is random, works once, and expires after 60 seconds. Generate a fresh link at any time:
+
+```bash
+intentcanvas plan open <review-id>
+```
+
+## The review workflow
+
+### Prepare trustworthy C/C++ facts
+
+Preview every tool invocation before allowing project build logic to run:
+
+```bash
+intentcanvas facts prepare /path/to/project --dry-run
+```
+
+Then prepare the current evidence:
+
+```bash
+intentcanvas facts prepare /path/to/project \
+  --output /tmp/current-facts.json
+```
+
+IntentCanvas reuses an existing `compile_commands.json`. If one is missing, v0.3 can configure a CMake project in a private directory under `~/.intentcanvas/evidence`. When available, clang-uml supplies class and include structure. Commands use fixed argument arrays rather than a shell, and the exact invocations are recorded in `manifest.json`.
+
+### Validate and import the plan
+
+The agent normally performs these steps through the Skill. They are also available directly:
 
 ```bash
 intentcanvas plan validate ./plan.json
 intentcanvas plan import ./plan.json
 ```
 
-Click the printed review link. Start at the overall module graph, enter one module at a time, and either approve it or explain what must change. For feedback confined to one module, the agent submits only the complete replacement module:
+The imported Plan Model is strict and versioned. Runtime owns approval state; text in the chat cannot silently mark a module as approved.
+
+### Revise only what changed
+
+For feedback confined to one module:
 
 ```bash
 intentcanvas plan revise <review-id> <module-id> ./module.json
 ```
 
-That module returns to `pending`; approvals for untouched modules remain valid. Broader relationship or risk changes still require whole-plan replanning.
+That module returns to `pending`. Untouched modules keep their approvals. Changes to system relationships, global risks, or project-wide verification still require a full-plan revision.
 
-The v0.3 mechanical gate requires every module to be approved before product-code writes. Check and freeze the exact approved Runtime revision:
+### Freeze the approved design
+
+v0.3 requires all modules to be approved before implementation:
 
 ```bash
 intentcanvas plan gate <review-id>
 intentcanvas plan freeze <review-id> ./approved-snapshot.json
 ```
 
-If you explicitly abandon the visual workflow, `intentcanvas plan detach` removes only the current workspace's private gate binding; it does not rewrite code or approval history.
+The snapshot is bound to one Runtime revision and one deterministic plan digest. If the plan changes, the prior acceptance result is invalidated.
 
-The strongest acceptance path compares that revision-bound snapshot against Code Facts extracted before and after implementation:
+### Verify Plan versus Actual
+
+The strongest path compares Code Facts from before and after implementation:
 
 ```bash
-intentcanvas acceptance facts <review-id> ./current-facts.json ./implemented-facts.json
+intentcanvas acceptance facts <review-id> \
+  ./current-facts.json ./implemented-facts.json
 ```
 
-You can also validate and compare a fact-derived Implemented Model:
+A Plan-shaped Implemented Model can also be published when a visual structural comparison is useful:
 
 ```bash
 intentcanvas plan validate ./implemented.json
 intentcanvas acceptance model <review-id> ./implemented.json
 ```
 
-The acceptance command prints a fresh link ending in `#acceptance`; click it to see the result in the same HTML review. Exit code `0` means the structural contract matches. Exit code `4` means the published result is incomplete or requires human review; it is not silently accepted.
+The command prints a fresh link ending in `#acceptance`. The HTML report shows an overall result and one card per module. Exit code `0` means the structural contract matches; exit code `4` means the result is incomplete or requires human review.
 
-## C/C++ facts without guessing
+## tmux, SSH, and clickable links
 
-IntentCanvas does not parse source by impression. Preview the exact preparation commands first:
+If tmux, Runtime, and the terminal run on the same machine, click the printed link directly.
+
+When Claude or Codex runs inside tmux on a remote SSH server, start the Bridge on the **local laptop** and keep it open:
 
 ```bash
-intentcanvas facts prepare /path/to/project --dry-run
+# Local laptop
+intentcanvas bridge ssh user@build-host \
+  --review <review-id> \
+  --remote-port 4317
 ```
 
-Then explicitly run preparation. Existing `compile_commands.json` is reused. If it is missing, v0.3 supports a fixed CMake configure in a private directory under `~/.intentcanvas/evidence`; clang-uml is run with a generated class/include configuration when available:
+Then generate a fresh link inside the remote session:
 
 ```bash
-intentcanvas facts prepare /path/to/project --output /tmp/current-facts.json
-intentcanvas facts inspect /tmp/current-facts.json
-```
-
-The original fully read-only extractor remains available for pre-generated artifacts:
-
-```bash
-intentcanvas facts extract /path/to/project \
-  --compile-commands /path/to/project/build/compile_commands.json \
-  --clang-uml /path/to/project/build/clang-uml.json \
-  --output /tmp/code-facts.json
-
-intentcanvas facts inspect /tmp/code-facts.json
-```
-
-The output contains the full in-scope C/C++ file inventory, compilation coverage, Git repository/base revision, symbols, includes, calls, diagnostics, provenance, declaration fingerprints, and implementation fingerprints only when an analysis artifact actually supplies a body. New source files are therefore visible even before they enter `compile_commands.json`. clang-uml alone does not attest that every symbol/body was emitted, so it remains medium confidence; missing or partial evidence cannot produce a false pass.
-
-`prepare` is explicit because CMake configuration evaluates project build logic. It uses fixed argument arrays and no shell, writes outside the checkout by default, limits tool time/output, and records the exact invocations in `manifest.json`. Projects without an existing compilation database currently receive automatic generation only for CMake; other build systems remain an explicit v0.3 follow-up.
-
-## tmux, iTerm2, and remote servers
-
-When tmux and the Runtime are on the same machine as the terminal, the printed OSC8 link is enough.
-
-When the Runtime runs on a remote SSH host, a process inside that host cannot create a listening port on your laptop. Use this two-terminal flow:
-
-```bash
-# On the laptop; keep this process open. Both sides default to port 4317.
-intentcanvas bridge ssh user@build-host --review <review-id> --remote-port 4317
-
-# In Claude/Codex/tmux on the remote host, after the tunnel is ready:
+# Remote server / tmux
 intentcanvas plan open <review-id>
 ```
 
-Click the fresh link printed in the remote terminal. iTerm opens `127.0.0.1:4317` on the laptop, and the same-port Bridge carries it to the remote Runtime. The Bridge invokes `ssh` with an argument array and no shell, validates all inputs, and binds both ends to loopback. Choosing a different local port is an advanced fallback and requires rewriting the port in the fresh link.
+Clicking the remote terminal link opens `127.0.0.1:4317` on the laptop, and the loopback-only Bridge forwards it to the remote Runtime. The Bridge validates its inputs, invokes `ssh` without a shell, and refuses to run its SSH mode from inside the remote session.
 
-Useful diagnostics:
+Inspect the current terminal environment with:
 
 ```bash
 intentcanvas bridge environment
 ```
 
-The fully automatic Moshi-style remote desktop handoff is still a later desktop-host feature. The v0.3 Bridge intentionally does not pretend a remote process can open a local tunnel by itself.
+## What v0.3 includes
 
-## Claude Code and Codex
+- System overview graph and one-line module summaries
+- Simplified per-module UML and focused call paths
+- Class, function, method, field, dependency, and pseudocode changes
+- Previous/next module navigation and targeted module revision
+- Module approval, revision history, execution gate, and Approved Snapshots
+- C/C++ source, compilation, symbol, include, and call facts
+- Plan-versus-Actual model diff and before/after Code Facts audit
+- HTML acceptance results with per-module drill-down
+- Claude Code Hook enforcement and shared Claude/Codex Skill
+- Loopback Runtime, one-use browser sessions, OSC8 links, and SSH/tmux Bridge
+- One-command setup, background start/stop, and environment diagnosis
 
-Normal installation is handled by `./intentcanvas setup`. For manual Claude Code development:
+## Current limits
 
-```bash
-claude plugin validate --strict /absolute/path/to/intentcanvas
-claude --plugin-dir /absolute/path/to/intentcanvas
+| Area | v0.3 behavior |
+| --- | --- |
+| Missing compilation database | Automatic generation currently supports CMake only |
+| Function bodies | clang-uml declarations alone are medium assurance; AST-backed body evidence is planned |
+| Build and test evidence | Commands can be planned, but automatic bounded capture is not yet integrated into acceptance |
+| Large graph exploration | Progressive Cytoscape.js expansion, dependency matrices, and clustering are planned |
+| Partial execution | The whole plan must be approved; safe partial-module file ownership is not inferred yet |
+| Remote desktop automation | The SSH Bridge is explicit; Moshi-style local supervision and notifications are future work |
+| Approval isolation | The local token prevents accidental cross-action, not a malicious same-user agent |
+
+See the [roadmap](docs/roadmap.md) for the planned AST evidence, quality capture, richer graphs, complexity views, and desktop host.
+
+## Frequently asked questions
+
+### Does the AI invent the UML?
+
+It must not. Static tools provide files, symbols, signatures, includes, calls, and provenance. The model is responsible for design judgment, module boundaries, risks, pseudocode, and the proposed future shape. Missing evidence stays visible and cannot produce a false pass.
+
+### Can it handle a large feature?
+
+Yes, by progressive disclosure rather than one enormous UML diagram. Start with the module graph, review one bounded module, expand only the relevant call path, and return to the overview.
+
+### Must the whole plan be regenerated after one comment?
+
+No. A module-scoped comment replaces only that complete module. Other modules and their approvals are preserved.
+
+### Does the web page replace the terminal workflow?
+
+No. Claude or Codex remains in tmux. The terminal prints a clickable review link; the browser is only the review surface, and you return to the same terminal after approval.
+
+### Is approval mechanically enforced?
+
+Claude Code uses a synchronous fail-closed PreToolUse Hook for workspaces bound to a review. Codex follows the same gate procedurally through the Skill. Both still use Runtime as the approval source of truth.
+
+## Repository layout
+
+```text
+apps/cli          terminal workflow and clickable review links
+apps/runtime      local review state, approval gate, persistence, and APIs
+apps/studio       dependency-free HTML review interface
+packages/protocol versioned Plan, Code Facts, event, and snapshot contracts
+packages/code-facts C/C++ evidence extraction and preparation
+packages/plan-diff Plan-versus-Actual comparison
+packages/bridge   loopback SSH/tmux forwarding
+skills/visual-plan shared Claude Code and Codex workflow
 ```
 
-Invoke `/intentcanvas:visual-plan` or ask Claude to create an IntentCanvas visual plan.
+Runtime and Studio live in one repository for v0.3, but their boundaries allow them to be split later. See [architecture](docs/architecture.md), [Claude Code integration](integrations/claude-code/README.md), and [Codex integration](integrations/codex/README.md).
 
-The repository now contains a Claude marketplace catalog, so manual users may also run `claude plugin marketplace add MisterRaindrop/intentcanvas` followed by `claude plugin install intentcanvas@intentcanvas`. For Codex development, link or copy `skills/visual-plan` into the Codex skills directory and invoke `$visual-plan`; setup performs that link without replacing an existing Skill. See the focused [Claude Code](integrations/claude-code/README.md) and [Codex](integrations/codex/README.md) guides.
-
-## Architecture and checks
-
-Runtime and Studio live in one repository for the first release, but the implementation boundaries keep them independently removable. They share the versioned Protocol, not each other's source. See [architecture boundaries](docs/architecture.md) and the [roadmap](docs/roadmap.md).
-
-Run all tests and boundary checks:
+## Development
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm check
 ```
 
-## Security posture
+The current release passes 191 automated tests, architecture boundary checks, strict Claude marketplace validation, and Codex plugin validation.
 
-- Runtime binds only to `127.0.0.1`, validates loopback Host/Origin values, requires JSON mutation bodies, limits payload size, blocks static path/symlink escapes, and serves Studio with restrictive browser headers.
-- A private per-user token authenticates CLI and Hook calls but never appears in a URL. Before sending it, clients require a fresh challenge/HMAC identity proof from the loopback Runtime. A 60-second one-use handoff becomes an origin-scoped browser session that can read and decide only its bound review; it cannot import, rewrite, emit events, or mint more links.
-- Persistent writes use a synced temporary file plus atomic rename, a single-owner data-directory lock, bounded revisions, and fail-closed corrupt/stale-state handling.
-- Bridge never constructs a shell command and never exposes Runtime on a non-loopback interface.
-- Import/open binds the current workspace to one review outside the repository. Claude Code's synchronous PreToolUse Hook blocks write-capable tools until that review is fully approved; Runtime failure and identity mismatch fail closed. Separate lifecycle telemetry is allowlisted, asynchronous, and fail open.
-- Approval comes from Runtime state, never from assistant prose or Hook telemetry. This is an accidental-cross-action boundary, not isolation from a malicious same-user agent: Claude/Codex, CLI, Hook, and Runtime normally share one OS account, so that agent can read the same local token. A future desktop host or user-presence signature is required for a cryptographically independent human-approval boundary.
+## Security
+
+- Runtime binds only to `127.0.0.1` and validates loopback Host and Origin values.
+- CLI and Hooks verify a fresh challenge/HMAC identity proof before sending the private bearer token.
+- Browser URLs contain a short-lived one-use handoff, never the long-term token.
+- Browser sessions are review-scoped and cannot import plans, rewrite reviews, emit agent events, or mint new handoffs.
+- Persistent state uses atomic writes, a single-owner data-directory lock, bounded history, and fail-closed corrupt-state handling.
+- Bridge binds both ends to loopback and never constructs a shell command.
+
+IntentCanvas does not yet provide cryptographic isolation from an agent running as the same OS user. A future desktop host or user-presence signature is required for an independently trusted human-approval boundary.
 
 ## License
 
-IntentCanvas is licensed under the [Apache License, Version 2.0](LICENSE).
+Licensed under the [Apache License, Version 2.0](LICENSE).
