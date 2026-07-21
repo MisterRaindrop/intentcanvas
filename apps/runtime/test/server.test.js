@@ -144,6 +144,19 @@ test("runtime exchanges a one-use link for a browser session without exposing it
   });
   assert.equal(browserAllowed.status, 200);
 
+  const approvePending = await fetch(
+    `${runtime.baseUrl}/api/reviews/doris-tde-demo/approve-pending`,
+    {
+      method: "POST",
+      headers: { ...sessionHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify({ expectedRevision: 1 })
+    }
+  );
+  assert.equal(approvePending.status, 200);
+  const approvePendingResult = await approvePending.json();
+  assert.equal(approvePendingResult.reviewStatus, "approved");
+  assert.equal(approvePendingResult.approvals.length, 5);
+
   const crossReview = await fetch(`${runtime.baseUrl}/api/reviews/another-review`, {
     headers: sessionHeaders
   });

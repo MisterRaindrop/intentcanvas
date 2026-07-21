@@ -3,6 +3,7 @@ import {
   createApprovedSnapshot,
   createAgentEventAck,
   validateAgentEvent,
+  validateApprovePendingRequest,
   validateApprovalDecision,
   validatePlanModel
 } from "@intentcanvas/protocol";
@@ -16,7 +17,8 @@ const REVISION_OPERATIONS = new Set([
   "created",
   "replaced",
   "module_replaced",
-  "decision_updated"
+  "decision_updated",
+  "pending_modules_approved"
 ]);
 
 export class ReviewStoreError extends Error {
@@ -498,6 +500,68 @@ export class ReviewStore {
       reviewId,
       moduleId: updatedModule.id,
       approval: structuredClone(updatedModule.approval),
+      reviewStatus: review.status,
+      revision: revision.revision,
+      revisionInfo: revision
+    };
+  }
+
+  approvePendingModules(reviewId, input, { now = () => new Date() } = {}) {
+    const validation = validateApprovePendingRequest(input);
+    if (!validation.valid) {
+      throw new ReviewStoreError("Invalid bulk approval request", {
+        code: "invalid_bulk_approval",
+        status: 400,
+        details: validation.errors
+      });
+    }
+
+    const current = this.#reviews.get(reviewId);
+    if (!current) {
+      throw new ReviewStoreError(`Unknown review: ${reviewId}`, {
+        code: "review_not_found",
+        status: 404
+      });
+    }
+    this.#assertExpectedRevision(reviewId, input.expectedRevision);
+
+    const pendingModules = current.modules.filter(
+      (module) => module.approval.decision === "pending"
+    );
+    if (pendingModules.length === 0) {
+      throw new ReviewStoreError("Review has no pending modules to approve", {
+        code: "no_pending_modules",
+        status: 409
+      });
+    }
+
+    this.#assertRevisionCapacity(reviewId);
+    const review = structuredClone(current);
+    const updatedAt = timestampFrom(now);
+    const approvals = [];
+    for (const module of review.modules) {
+      if (module.approval.decision !== "pending") continue;
+      module.approval = {
+        decision: "approved",
+        comment: "",
+        updatedAt
+      };
+      approvals.push({
+        moduleId: module.id,
+        approval: structuredClone(module.approval)
+      });
+    }
+
+    updateReviewStatus(review);
+    requireValidPlan(review);
+    const revision = this.#appendRevision(reviewId, review, {
+      operation: "pending_modules_approved",
+      createdAt: updatedAt
+    });
+    this.#reviews.set(reviewId, review);
+    return {
+      reviewId,
+      approvals,
       reviewStatus: review.status,
       revision: revision.revision,
       revisionInfo: revision

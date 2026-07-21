@@ -23,6 +23,7 @@ test("studio contains the complete overview and module review journey", async ()
     "上一个模块",
     "下一个模块",
     "批准这个模块",
+    "一键批准全部待审核模块",
     "要求调整",
     "返回总体设计",
     "主要风险",
@@ -67,6 +68,11 @@ test("studio selects the requested review and calls the decisions API", async ()
   assert.match(script, /headers\.Authorization = `Bearer \$\{state\.sessionToken\}`/);
   assert.match(script, /submitDecision\("approved"\)/);
   assert.match(script, /submitDecision\("changes_requested"\)/);
+  assert.match(script, /APPROVE_PENDING_ENDPOINT/);
+  assert.match(script, /async function approveAllPendingModules\(\)/);
+  assert.match(script, /window\.confirm\(/);
+  assert.match(script, /normalizeApprovePendingResponse\(await response\.json\(\)/);
+  assert.match(script, /"approve-all-button"\]\.addEventListener/);
 });
 
 test("studio exchanges a one-use handoff for an origin-scoped browser session", async () => {

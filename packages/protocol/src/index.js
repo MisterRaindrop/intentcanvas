@@ -6,6 +6,7 @@ export {
   PLAN_STATUSES,
   assertPlanModel,
   clonePlanModel,
+  validateApprovePendingRequest,
   validateApprovalDecision,
   validatePlanModel
 } from "./plan-model.js";

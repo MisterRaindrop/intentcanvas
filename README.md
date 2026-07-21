@@ -39,7 +39,7 @@ the implementation is checked against the approved plan
 | --- | --- |
 | System overview | Affected modules, their relationships, and one plain-language summary per module |
 | Module detail | Simplified UML, top-level entry points, critical call paths, member changes, and pseudocode |
-| Approval | Approve a module, request changes, and leave focused feedback |
+| Approval | Review modules individually, request changes, or approve every pending module at once |
 | Acceptance | Differences between the Approved Plan and the implemented code |
 
 Change status uses a consistent color language:
@@ -176,6 +176,8 @@ Open visual plan
 
 Open the link in your local browser.
 
+The link is one-use and remains valid for five minutes. Once opened, the browser review session can remain active.
+
 ## Remote tmux: open the server page locally
 
 Assume that:
@@ -241,6 +243,8 @@ This means:
 - IntentCanvas does not need to be installed locally.
 
 If your terminal does not open the link directly, copy the complete URL into your local browser.
+
+The link is one-use and valid for five minutes. If it expires, ask the agent for a fresh link; the Plan is not lost.
 
 ### 4. Save the SSH configuration
 
@@ -316,6 +320,8 @@ In the page:
 
 When one module is rejected, the agent regenerates only that module. Approvals for other modules remain valid.
 
+If the overall design is correct, use **Approve all pending modules**. It approves only modules that are still pending and never overwrites a module marked **Changes requested**.
+
 ### 3. Implement after approval
 
 After every module is approved, return to the terminal:
@@ -345,6 +351,12 @@ The acceptance view reports:
 - evidence gaps that require human judgment.
 
 If implementation requires a material change to the approved design, return to review instead of rewriting the approval record.
+
+## Does leaving the page open use model tokens?
+
+No. The HTML page, Runtime, module navigation, expanded call paths, comments, and approval actions are all local and do not call a model.
+
+Model tokens are used only when Claude Code or Codex analyzes code, creates or revises the Plan, implements the change, or produces acceptance results. Leaving the review page open does not consume additional tokens.
 
 ## Workflow
 

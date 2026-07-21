@@ -254,6 +254,44 @@ export function normalizeDecisionResponse(raw, { expectedReviewId, expectedModul
   return structuredClone(raw);
 }
 
+export function normalizeApprovePendingResponse(raw, {
+  expectedReviewId,
+  expectedModuleIds
+} = {}) {
+  requiredObject(raw, "approvePendingResponse");
+  requiredString(raw.reviewId, "approvePendingResponse.reviewId");
+  if (expectedReviewId !== undefined && raw.reviewId !== expectedReviewId) {
+    incompatible("approvePendingResponse.reviewId", "与当前计划不一致");
+  }
+
+  const allowedModuleIds = expectedModuleIds === undefined
+    ? null
+    : new Set(expectedModuleIds);
+  const seenModuleIds = new Set();
+  requiredArray(raw.approvals, "approvePendingResponse.approvals", { nonEmpty: true })
+    .forEach((entry, index) => {
+      const path = `approvePendingResponse.approvals[${index}]`;
+      requiredObject(entry, path);
+      requiredString(entry.moduleId, `${path}.moduleId`);
+      if (allowedModuleIds && !allowedModuleIds.has(entry.moduleId)) {
+        incompatible(`${path}.moduleId`, "必须引用当前计划中的模块");
+      }
+      if (seenModuleIds.has(entry.moduleId)) {
+        incompatible(`${path}.moduleId`, "不能重复");
+      }
+      seenModuleIds.add(entry.moduleId);
+      validateApproval(entry.approval, `${path}.approval`, { requireUpdatedAt: true });
+      if (entry.approval.decision !== "approved") {
+        incompatible(`${path}.approval.decision`, "批量审批结果必须是 approved");
+      }
+    });
+  requiredEnum(raw.reviewStatus, PLAN_STATUSES, "approvePendingResponse.reviewStatus");
+  if (!Number.isInteger(raw.revision) || raw.revision < 1) {
+    incompatible("approvePendingResponse.revision", "必须是当前计划的正整数版本");
+  }
+  return structuredClone(raw);
+}
+
 function requiredNonNegativeInteger(value, path) {
   if (!Number.isInteger(value) || value < 0) incompatible(path, "必须是非负整数");
 }

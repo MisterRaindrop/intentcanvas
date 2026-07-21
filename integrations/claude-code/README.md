@@ -93,4 +93,4 @@ intentcanvas bridge \
   --remote-port 4317
 ```
 
-After it reports the same-port tunnel ready, run `intentcanvas plan open <review-id>` inside the remote Claude/tmux session and click the fresh URL printed there. The link works once and expires after 60 seconds; rerun the command when needed. Never run the Bridge `ssh` subcommand inside the remote SSH session; a remote process cannot create the required client-local listener.
+After it reports the same-port tunnel ready, run `intentcanvas plan open <review-id>` inside the remote Claude/tmux session and click the fresh URL printed there. The link works once and expires after five minutes; rerun the command when needed. Never run the Bridge `ssh` subcommand inside the remote SSH session; a remote process cannot create the required client-local listener.

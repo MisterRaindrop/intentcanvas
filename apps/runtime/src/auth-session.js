@@ -6,7 +6,7 @@ import {
 } from "@intentcanvas/local-auth";
 import { ReviewStoreError } from "./review-store.js";
 
-export const HANDOFF_TTL_MS = 60_000;
+export const HANDOFF_TTL_MS = 5 * 60_000;
 export const SESSION_TTL_MS = 8 * 60 * 60 * 1_000;
 const MAX_HANDOFFS = 256;
 const MAX_SESSIONS = 512;

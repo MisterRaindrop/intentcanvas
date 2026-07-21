@@ -62,6 +62,7 @@ const VERIFICATION_KEYS = Object.freeze(["id", "type", "command", "expected", "m
 const APPROVAL_DECISION_KEYS = Object.freeze([
   "moduleId", "expectedRevision", "decision", "comment"
 ]);
+const APPROVE_PENDING_KEYS = Object.freeze(["expectedRevision"]);
 
 function addError(errors, path, message, code = "invalid_value") {
   errors.push({ path, message, code });
@@ -481,6 +482,21 @@ export function validateApprovalDecision(value) {
       "$.comment",
       "must explain the requested changes",
       "comment_required"
+    );
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+export function validateApprovePendingRequest(value) {
+  const errors = [];
+  if (!requireObject(value, "$", errors)) return { valid: false, errors };
+  rejectUnknownKeys(value, APPROVE_PENDING_KEYS, "$", errors);
+  if (!Number.isInteger(value.expectedRevision) || value.expectedRevision < 1) {
+    addError(
+      errors,
+      "$.expectedRevision",
+      "must be a positive integer",
+      "invalid_number"
     );
   }
   return { valid: errors.length === 0, errors };

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RuntimeAuthManager } from "../src/auth-session.js";
+import { HANDOFF_TTL_MS, RuntimeAuthManager } from "../src/auth-session.js";
 import { verifyRuntimeIdentityProof } from "@intentcanvas/local-auth";
 
 const AUTH_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -24,6 +24,9 @@ test("exchanges a one-use short handoff for a review-scoped bearer session", () 
     randomBytesImpl: (size) => Buffer.alloc(size, ++byte)
   });
   const handoff = manager.createHandoff("review-1");
+  assert.equal(HANDOFF_TTL_MS, 5 * 60_000);
+  assert.equal(manager.handoffTtlMs, 5 * 60_000);
+  assert.equal(Date.parse(handoff.expiresAt), current + 5 * 60_000);
   const exchanged = manager.exchangeHandoff(handoff.handoff);
   const authorization = { authorization: `Bearer ${exchanged.session}` };
 

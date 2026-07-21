@@ -16,7 +16,7 @@ intentcanvas-bridge ssh user@build-host --review review-123 \
 The local port defaults to the same value as the remote Runtime port (4317), so
 a URL printed inside the remote terminal opens correctly on the client. After
 the Bridge reports readiness, run this in the remote session and click its
-60-second one-use link:
+five-minute one-use link:
 
 ```sh
 intentcanvas plan open review-123

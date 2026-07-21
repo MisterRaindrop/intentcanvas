@@ -57,4 +57,4 @@ intentcanvas bridge \
   --remote-port 4317
 ```
 
-After the same-port tunnel is ready, run `intentcanvas plan open <review-id>` in the remote Codex/tmux session and click its 60-second one-use URL. The `ssh` subcommand deliberately refuses to run inside a remote SSH session.
+After the same-port tunnel is ready, run `intentcanvas plan open <review-id>` in the remote Codex/tmux session and click its five-minute one-use URL. The `ssh` subcommand deliberately refuses to run inside a remote SSH session.

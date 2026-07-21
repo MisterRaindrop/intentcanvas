@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DEFAULT_REVIEW_ID,
   normalizeAcceptanceResponse,
+  normalizeApprovePendingResponse,
   normalizeDecisionResponse,
   normalizeReview,
   reviewIdFromSearch
@@ -184,6 +185,40 @@ test("incomplete or cross-module decision responses are rejected", () => {
     () => normalizeDecisionResponse(response, { expectedModuleId: "storage" }),
     /decisionResponse\.revision/
   );
+});
+
+test("bulk approval responses are validated before replacing module decisions", () => {
+  const response = {
+    reviewId: "review-1",
+    approvals: [{
+      moduleId: "storage",
+      approval: {
+        decision: "approved",
+        comment: "",
+        updatedAt: "2026-07-17T08:30:00.000Z"
+      }
+    }],
+    reviewStatus: "approved",
+    revision: 4
+  };
+  assert.deepEqual(normalizeApprovePendingResponse(response, {
+    expectedReviewId: "review-1",
+    expectedModuleIds: ["storage"]
+  }), response);
+
+  const unknownModule = structuredClone(response);
+  unknownModule.approvals[0].moduleId = "other";
+  assert.throws(
+    () => normalizeApprovePendingResponse(unknownModule, {
+      expectedReviewId: "review-1",
+      expectedModuleIds: ["storage"]
+    }),
+    /moduleId/
+  );
+  const wrongDecision = structuredClone(response);
+  wrongDecision.approvals[0].approval.decision = "changes_requested";
+  wrongDecision.approvals[0].approval.comment = "blocked";
+  assert.throws(() => normalizeApprovePendingResponse(wrongDecision), /approved/);
 });
 
 test("acceptance summaries are validated before Studio renders them", () => {

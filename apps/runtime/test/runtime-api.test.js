@@ -212,6 +212,37 @@ test("API resets client-supplied approval and rejects stale review decisions", a
   assert.equal(current.modules[0].approval.decision, "pending");
 });
 
+test("API approves all pending modules with one revision", async (t) => {
+  const runtime = await startManagedRuntime(t);
+  const plan = createTdePlanFixture();
+  plan.id = "bulk-approval";
+  const imported = await jsonRequest(`${runtime.baseUrl}/api/reviews`, "POST", plan);
+
+  const approved = await jsonRequest(
+    `${runtime.baseUrl}/api/reviews/bulk-approval/approve-pending`,
+    "POST",
+    { expectedRevision: imported.body.revision }
+  );
+  assert.equal(approved.response.status, 200);
+  assert.equal(approved.body.revision, 2);
+  assert.equal(approved.body.reviewStatus, "approved");
+  assert.equal(approved.body.approvals.length, plan.modules.length);
+  assert.equal(approved.body.revisionInfo.operation, "pending_modules_approved");
+
+  const current = await (
+    await fetch(`${runtime.baseUrl}/api/reviews/bulk-approval`)
+  ).json();
+  assert.ok(current.modules.every((module) => module.approval.decision === "approved"));
+
+  const repeated = await jsonRequest(
+    `${runtime.baseUrl}/api/reviews/bulk-approval/approve-pending`,
+    "POST",
+    { expectedRevision: 2 }
+  );
+  assert.equal(repeated.response.status, 409);
+  assert.equal(repeated.body.error.code, "no_pending_modules");
+});
+
 test("Runtime computes, persists, serves, and invalidates compact acceptance results", async (t) => {
   const runtime = await startManagedRuntime(t);
   const plan = createTdePlanFixture();

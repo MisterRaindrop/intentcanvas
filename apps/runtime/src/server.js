@@ -239,6 +239,7 @@ function assertBrowserSessionScope(request, segments, principal) {
     [3, 4, 5].includes(segments.length);
   const isDecision = request.method === "POST" &&
     ((segments.length === 4 && segments[3] === "decisions") ||
+      (segments.length === 4 && segments[3] === "approve-pending") ||
       (segments.length === 6 && segments[3] === "modules" && segments[5] === "approval"));
   if (reviewId !== principal.reviewId || (!isReviewRead && !isDecision)) {
     throw new ReviewStoreError("Browser session is limited to its review", {
@@ -648,6 +649,19 @@ export function createRequestHandler({
         const input = await readJson(request);
         const result = await writer.mutate(
           (candidate) => candidate.submitDecision(segments[2], input, { now })
+        );
+        sendJson(response, 200, result, {
+          headers: { "X-IntentCanvas-Revision": String(result.revision) }
+        });
+        return;
+      }
+
+      if (request.method === "POST" && segments.length === 4 &&
+          segments[0] === "api" && segments[1] === "reviews" &&
+          segments[3] === "approve-pending") {
+        const input = await readJson(request);
+        const result = await writer.mutate(
+          (candidate) => candidate.approvePendingModules(segments[2], input, { now })
         );
         sendJson(response, 200, result, {
           headers: { "X-IntentCanvas-Revision": String(result.revision) }

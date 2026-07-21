@@ -211,6 +211,61 @@ test("ReviewStore rejects changes_requested without a useful comment", () => {
   );
 });
 
+test("ReviewStore approves every pending module in one atomic revision", () => {
+  const store = new ReviewStore([createTdePlanFixture()]);
+  const result = store.approvePendingModules(
+    "doris-tde-demo",
+    { expectedRevision: 1 },
+    { now: () => new Date("2026-07-17T05:00:00.000Z") }
+  );
+
+  assert.equal(result.revision, 2);
+  assert.equal(result.reviewStatus, "approved");
+  assert.equal(result.approvals.length, 5);
+  assert.ok(result.approvals.every(
+    (entry) => entry.approval.decision === "approved" &&
+      entry.approval.updatedAt === "2026-07-17T05:00:00.000Z"
+  ));
+  assert.ok(store.getReview("doris-tde-demo").modules.every(
+    (module) => module.approval.decision === "approved"
+  ));
+  assert.deepEqual(
+    store.listRevisions("doris-tde-demo").map((revision) => revision.operation),
+    ["created", "pending_modules_approved"]
+  );
+  assert.equal(
+    ReviewStore.fromState(store.exportState()).getReview("doris-tde-demo").status,
+    "approved"
+  );
+});
+
+test("bulk approval preserves requested changes and rejects stale or empty requests", () => {
+  const store = new ReviewStore([createTdePlanFixture()]);
+  store.submitDecision("doris-tde-demo", {
+    moduleId: "write-path",
+    decision: "changes_requested",
+    comment: "Keep this module blocked",
+    expectedRevision: 1
+  });
+
+  assert.throws(
+    () => store.approvePendingModules("doris-tde-demo", { expectedRevision: 1 }),
+    (error) => error instanceof ReviewStoreError && error.code === "stale_review_revision"
+  );
+  const result = store.approvePendingModules("doris-tde-demo", { expectedRevision: 2 });
+  assert.equal(result.reviewStatus, "changes_requested");
+  assert.equal(result.approvals.length, 4);
+  assert.equal(
+    store.getReview("doris-tde-demo").modules.find((module) => module.id === "write-path")
+      .approval.decision,
+    "changes_requested"
+  );
+  assert.throws(
+    () => store.approvePendingModules("doris-tde-demo", { expectedRevision: 3 }),
+    (error) => error instanceof ReviewStoreError && error.code === "no_pending_modules"
+  );
+});
+
 test("ReviewStore validates Agent events and returns a versioned ack", () => {
   const store = new ReviewStore([createTdePlanFixture()]);
   const event = {

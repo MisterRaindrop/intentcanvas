@@ -6,6 +6,7 @@ import {
   assertPlanModel,
   createTdePlanFixture,
   tdePlanFixture,
+  validateApprovePendingRequest,
   validateApprovalDecision,
   validatePlanModel
 } from "../src/index.js";
@@ -71,6 +72,16 @@ test("approval decisions reject pending and malformed requests", () => {
   });
   assert.equal(missingComment.valid, false);
   assert.ok(missingComment.errors.some((error) => error.code === "comment_required"));
+});
+
+test("bulk approval requests require only the current positive revision", () => {
+  assert.equal(validateApprovePendingRequest({ expectedRevision: 3 }).valid, true);
+  assert.equal(validateApprovePendingRequest({ expectedRevision: 0 }).valid, false);
+  assert.equal(validateApprovePendingRequest({}).valid, false);
+  assert.equal(validateApprovePendingRequest({
+    expectedRevision: 3,
+    decision: "approved"
+  }).valid, false);
 });
 
 test("stored changes_requested approvals also require an explanation", () => {

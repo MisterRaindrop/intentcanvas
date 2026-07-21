@@ -1,5 +1,6 @@
 import {
   normalizeAcceptanceResponse,
+  normalizeApprovePendingResponse,
   normalizeDecisionResponse,
   normalizeReview,
   reviewIdFromSearch
@@ -29,6 +30,7 @@ import {
 
   const REVIEW_ENDPOINT = `/api/reviews/${encodeURIComponent(REVIEW_ID)}`;
   const DECISIONS_ENDPOINT = `${REVIEW_ENDPOINT}/decisions`;
+  const APPROVE_PENDING_ENDPOINT = `${REVIEW_ENDPOINT}/approve-pending`;
   const REVISIONS_ENDPOINT = `${REVIEW_ENDPOINT}/revisions`;
   const ACCEPTANCE_ENDPOINT = `${REVIEW_ENDPOINT}/acceptance`;
 
@@ -73,7 +75,8 @@ import {
       "retry-button", "connection-status", "review-id", "overview-title", "review-summary",
       "review-revision", "refresh-review-button", "revision-history", "revision-list",
       "revision-message",
-      "review-progress", "start-review-button", "architecture-graph", "architecture-lines",
+      "review-progress", "start-review-button", "approve-all-button", "approve-all-message",
+      "architecture-graph", "architecture-lines",
       "architecture-nodes", "mobile-relationships", "module-summaries", "breadcrumb-overview",
       "risks-list", "verification-list",
       "refresh-acceptance-button", "acceptance-message", "acceptance-empty",
@@ -444,7 +447,8 @@ import {
       created: "创建计划",
       replaced: "替换整份计划",
       module_replaced: "调整单个模块",
-      decision_updated: "记录模块审批"
+      decision_updated: "记录模块审批",
+      pending_modules_approved: "一键批准待审核模块"
     };
     [...revisions].reverse().forEach((revision) => {
       if (!Number.isInteger(revision.revision) || revision.revision < 1 ||
@@ -470,8 +474,13 @@ import {
   function renderProgress() {
     const modules = state.review.modules;
     const reviewed = modules.filter((module) => module.approval.decision !== "pending").length;
+    const pending = modules.length - reviewed;
     elements["review-progress"].textContent = `${reviewed} / ${modules.length} 个模块已审核`;
     elements["start-review-button"].textContent = reviewed === 0 ? "开始逐模块审核" : "继续逐模块审核";
+    elements["approve-all-button"].textContent = pending > 0
+      ? `一键批准全部待审核模块（${pending}）`
+      : "没有待审核模块";
+    elements["approve-all-button"].disabled = pending === 0 || state.staleReview || state.savingDecision;
   }
 
   function renderArchitecture() {
@@ -1046,6 +1055,7 @@ import {
     }
 
     state.savingDecision = true;
+    renderProgress();
     setDecisionControlsDisabled(true);
     elements["decision-message"].textContent = "正在保存审核结果……";
     try {
@@ -1072,6 +1082,7 @@ import {
       module.approval = result.approval;
       state.review.status = result.reviewStatus;
       state.revision = result.revision;
+      state.revisionsLoaded = false;
       updateDecisionStatus(module);
       renderProgress();
       elements["decision-message"].textContent = result.approval.decision === "approved"
@@ -1081,6 +1092,68 @@ import {
       elements["decision-message"].textContent = `保存失败：${error instanceof Error ? error.message : "请稍后重试"}`;
     } finally {
       state.savingDecision = false;
+      renderProgress();
+      setDecisionControlsDisabled(state.staleReview || state.savingDecision);
+    }
+  }
+
+  async function approveAllPendingModules() {
+    if (state.savingDecision || !state.review) return;
+    const pendingModules = state.review.modules.filter(
+      (module) => module.approval.decision === "pending"
+    );
+    if (pendingModules.length === 0) return;
+    if (!Number.isInteger(state.revision) || state.revision < 1 || state.staleReview) {
+      elements["approve-all-message"].textContent = "计划版本已变化，请先刷新后再审批。";
+      renderProgress();
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `将一次批准 ${pendingModules.length} 个待审核模块。\n\n` +
+      "请确认你已经看完整体设计。已标记“需要调整”的模块不会被覆盖。"
+    );
+    if (!confirmed) return;
+
+    state.savingDecision = true;
+    renderProgress();
+    setDecisionControlsDisabled(true);
+    elements["approve-all-message"].textContent = "正在批准全部待审核模块……";
+    try {
+      const response = await fetch(APPROVE_PENDING_ENDPOINT, {
+        method: "POST",
+        headers: reviewHeaders({ json: true }),
+        body: JSON.stringify({ expectedRevision: state.revision })
+      });
+      if (response.status === 409) {
+        state.staleReview = true;
+        state.revisionsLoaded = false;
+        throw new Error("计划已经更新，请刷新后重新确认总体设计");
+      }
+      if (!response.ok) throw new Error(`服务返回 ${response.status}`);
+      const result = normalizeApprovePendingResponse(await response.json(), {
+        expectedReviewId: state.review.id,
+        expectedModuleIds: state.review.modules.map((module) => module.id)
+      });
+      for (const entry of result.approvals) {
+        const module = moduleById(entry.moduleId);
+        if (module) module.approval = entry.approval;
+      }
+      state.review.status = result.reviewStatus;
+      state.revision = result.revision;
+      state.revisionsLoaded = false;
+      if (state.selectedModuleId) {
+        const selectedModule = moduleById(state.selectedModuleId);
+        if (selectedModule) updateDecisionStatus(selectedModule);
+      }
+      elements["approve-all-message"].textContent =
+        `已一次批准 ${result.approvals.length} 个待审核模块。`;
+    } catch (error) {
+      elements["approve-all-message"].textContent =
+        `批量审批失败：${error instanceof Error ? error.message : "请稍后重试"}`;
+    } finally {
+      state.savingDecision = false;
+      renderProgress();
       setDecisionControlsDisabled(state.staleReview || state.savingDecision);
     }
   }
@@ -1103,6 +1176,7 @@ import {
         || state.review.modules[0];
       openModule(next.id);
     });
+    elements["approve-all-button"].addEventListener("click", approveAllPendingModules);
     elements["breadcrumb-overview"].addEventListener("click", () => openOverview());
     elements["back-overview"].addEventListener("click", () => openOverview());
     elements["previous-module"].addEventListener("click", (event) => {

@@ -417,6 +417,15 @@ h3 {
   text-align: right;
 }
 
+.approve-all-message {
+  max-width: 340px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-align: right;
+}
+
 .button {
   display: inline-flex;
   min-height: 42px;
@@ -1362,6 +1371,10 @@ h3 {
   }
 
   .progress-copy {
+    text-align: left;
+  }
+
+  .approve-all-message {
     text-align: left;
   }
 
