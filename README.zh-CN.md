@@ -2,311 +2,376 @@
 
 [![Release](https://img.shields.io/github/v/release/MisterRaindrop/intentcanvas?display_name=tag)](https://github.com/MisterRaindrop/intentcanvas/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](package.json)
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933?logo=node.js&logoColor=white)](package.json)
 
-**先把 AI 的开发计划变成你能看懂、能批准的图，再允许它修改代码。**
+**先把 AI 的开发计划变成可以审核的图，再允许它修改代码。**
 
-IntentCanvas 将 AI 生成的代码计划变成一份可视化设计契约：先看总体架构，再逐个审核模块，批准准确的修改方案，最后把真实实现与批准版本进行比较。
-
-> 先看图，再批准开发；实现完成后，用事实验收结果。
-
-[English](README.md) · [快速开始](#快速开始) · [完整审查流程](#完整审查流程) · [远程-tmux](#tmuxssh-与终端点击) · [路线图](docs/roadmap.md)
-
-IntentCanvas 面向那些很难只靠文字判断的修改：大型 C/C++ 项目、数据库内核、分布式系统、跨模块功能和结构性重构。
-
-## 为什么需要 IntentCanvas
-
-普通 AI Plan 往往要求你阅读几千字，然后在脑中重新还原代码结构。以数据库透明加密为例，仅靠文字很难快速回答：
-
-- 到底会修改哪些模块？
-- 新抽象从调用链的哪个位置进入？
-- 哪些类、函数和依赖会新增、删除或修改？
-- 最终实现是否偷偷增加了计划外内容？
-
-IntentCanvas 将同一次开发拆成三个审查层级：
-
-| 审查层级 | 你会看到什么 | 你需要判断什么 |
-| --- | --- | --- |
-| 总体设计 | 本次涉及的模块、模块关系，以及每个模块一句通俗说明 | 整体范围和架构是否合理？ |
-| 单个模块 | 简化 UML、顶层入口、关键调用路径、成员变化、伪代码、风险和验证方式 | 是否在正确的位置，用正确的方式修改？ |
-| 最终验收 | Plan 与 Actual 对比、未完成内容、计划外修改和证据缺口 | 实现是否遵守了批准方案？ |
-
-复杂功能也不会被塞进一张巨大的 UML 图。你从总体设计进入一个模块，每次只审查有限内容，然后使用 **上一个模块**、**下一个模块** 或 **返回总体设计** 继续查看。
-
-一个聚焦后的调用路径可能是：
+IntentCanvas 为 Claude Code 和 Codex 提供图形优先的代码规划流程：
 
 ```text
-DeltaWriterV2::init()
-    └── … 省略 3 个未修改函数（点击展开）
-        └── RowsetWriterContext::fs()                 修改
-            └── EncryptedOutputStream                 新增
+分析代码 → 生成可视化计划 → 人工审核 → 批准后开发 → Plan / Actual 验收
 ```
 
-如果某个模块需要调整，只重新生成这个完整模块；其他模块和已经做出的批准不会丢失。
+[English](README.md) · [安装](#安装-intentcanvas) · [远程 tmux](#远程-tmux在本地查看服务器页面) · [如何使用](#如何使用) · [路线图](docs/roadmap.md)
 
-## 工作原理
+## 背景
 
-```mermaid
-flowchart LR
-    A["真实代码事实"] --> B["候选可视化计划"]
-    B --> C["HTML 图形化评审"]
-    C --> D{"是否批准？"}
-    D -- "只调整一个模块" --> B
-    D -- "批准" --> E["绑定版本的批准快照"]
-    E --> F["执行代码修改"]
-    F --> G["重新提取代码事实"]
-    G --> H["Plan 与 Actual 对比"]
-    H --> C
-```
+复杂功能通常跨越多个模块。只阅读文字 Plan，很难快速判断：
 
-整个流程遵守四条原则：
+- 准备修改哪些模块；
+- 新增的类、接口和依赖放在哪里；
+- 关键调用路径会如何变化；
+- 是否增加了不必要的抽象；
+- 最终实现是否偏离了批准方案。
+
+IntentCanvas 将 Plan 转换为可交互的 HTML 页面，使用总体架构图、单模块简化 UML、关键调用路径、成员 Diff 和伪代码降低评审成本。
 
 ```text
 代码事实由分析工具提取
-设计判断由模型完成
-批准之前不允许开始实现
-实现完成后必须与批准方案比较
+设计方案由 AI 生成
+修改范围由用户批准
+最终实现与批准方案自动比较
 ```
 
-## 快速开始
+## 你会看到什么
 
-### 1. 安装
+| 页面 | 内容 |
+| --- | --- |
+| 总体设计 | 涉及模块、模块关系、每个模块的一行修改说明 |
+| 模块详情 | 简化 UML、顶层函数入口、关键调用路径、成员变化和伪代码 |
+| 审批页面 | 批准模块、退回模块、填写修改意见 |
+| 验收页面 | Approved Plan 与实际代码的差异 |
 
-需要：
+变更状态使用统一颜色：
 
-- Node.js 22 或更高版本
-- Corepack 或 pnpm
-- 如果需要 Agent 集成，安装 Claude Code 和/或 Codex
-- C/C++ 项目建议安装 `clang-uml`，但不是启动 IntentCanvas 的硬性要求
+```text
+绿色：新增
+红色：删除
+黄色：修改
+灰色：保持不变
+```
+
+复杂功能不会被塞进一张巨大的 UML 图。用户先查看总体设计，再一次只审核一个模块。
+
+## 环境要求
+
+- macOS 或 Linux
+- Git
+- Node.js 22.13 或更高版本
+- pnpm 或 Corepack
+- Claude Code 或 Codex
+- tmux，可选，推荐用于远程开发
+
+检查 Node.js：
+
+```bash
+node --version
+```
+
+如果版本低于 `22.13`，请先升级：
+
+```bash
+nvm install 22
+nvm use 22
+corepack enable
+```
+
+参考：[Node.js 下载](https://nodejs.org/en/download/archive/v22)
+
+### 安装 Claude Code 或 Codex
+
+IntentCanvas 支持二者任选其一。
+
+Claude Code：
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Codex CLI：
+
+```bash
+npm install -g @openai/codex
+```
+
+参考：[Claude Code 安装文档](https://code.claude.com/docs/en/quickstart) · [Codex CLI 文档](https://learn.chatgpt.com/docs/codex/cli)
+
+## 安装 IntentCanvas
+
+只需要执行：
 
 ```bash
 git clone https://github.com/MisterRaindrop/intentcanvas.git
 cd intentcanvas
 ./intentcanvas setup
+```
+
+`setup` 是唯一安装入口，会自动完成：
+
+- 安装项目依赖；
+- 启动 IntentCanvas Runtime；
+- 安装 Claude Code 插件和审批 Hook；
+- 安装 Codex `visual-plan` Skill；
+- 创建本地凭证和命令行入口。
+
+不需要再进入 Claude Code 或 Codex 手工安装插件。
+
+检查安装状态：
+
+```bash
 ./intentcanvas doctor
 ```
 
-Setup 可以重复执行。它会安装工作区依赖、创建本地私有凭证、启动只监听本机的 Runtime、链接 Codex Skill，并在发现 Claude Code 时注册本地 Marketplace。它会创建 `~/.local/bin/intentcanvas`，但不会覆盖同名且不属于 IntentCanvas 的命令或 Skill。
+> 请使用运行 Claude Code 或 Codex 的同一个系统用户执行 Setup。
+>
+> 如果 Agent 运行在远程服务器，就在远程服务器安装 IntentCanvas。
 
-下文统一使用 `intentcanvas`。如果 `~/.local/bin` 不在你的 `PATH` 中，请在仓库内改用 `./intentcanvas`。
+## Claude Code 与 Codex
 
-### 2. 让 Agent 生成可视化计划
+### Claude Code
 
-在 Claude Code 中：
+首次安装后重新启动 Claude Code，或者执行：
+
+```text
+/reload-plugins
+```
+
+生成可视化计划：
 
 ```text
 /intentcanvas:visual-plan
 ```
 
-在 Codex 中：
+### Codex
+
+首次安装后重新启动 Codex。
+
+生成可视化计划：
 
 ```text
 $visual-plan
 ```
 
-然后像平时一样描述开发需求：
+## 本机 tmux
+
+Claude Code、Codex、tmux 和浏览器都在同一台机器时，不需要配置 tmux：
+
+```bash
+cd /path/to/project
+tmux new-session -A -s project
+claude
+```
+
+使用 Codex 时将最后一行替换为：
+
+```bash
+codex
+```
+
+Agent 生成计划后，终端会显示：
 
 ```text
-给存储层增加透明数据加密。先生成可视化计划，等我批准后再修改代码。
+Open visual plan
 ```
 
-### 3. 点击终端里的评审链接
+点击链接即可在本机浏览器中打开页面。
 
-终端会输出 OSC8 超链接。在 iTerm2 等兼容终端中直接点击，即可打开本地 HTML 页面。
+## 远程 tmux：在本地查看服务器页面
 
-先查看总体模块图，再逐个进入模块。对于不合理的部分直接填写调整意见；全部模块确认后回到原来的终端继续开发。
+假设：
 
-浏览器链接使用随机的一次性凭证，60 秒后过期，而且只能使用一次。需要重新打开时执行：
+- Claude Code、Codex、tmux 和 IntentCanvas 在远程服务器；
+- iTerm2 和浏览器在本地电脑；
+- IntentCanvas 页面运行在服务器的 `127.0.0.1:4317`。
+
+```mermaid
+flowchart LR
+    A["本地浏览器<br/>127.0.0.1:4317"] --> B["本地 SSH 端口转发"]
+    B --> C["远程服务器<br/>127.0.0.1:4317"]
+    C --> D["IntentCanvas HTML"]
+    E["远程 tmux<br/>Claude / Codex"] --> C
+```
+
+### 1. 在本地电脑连接服务器
+
+在本地终端执行：
 
 ```bash
-intentcanvas plan open <review-id>
+ssh -L 4317:127.0.0.1:4317 user@server
 ```
 
-## 完整审查流程
-
-### 准备可信的 C/C++ 代码事实
-
-在运行项目构建逻辑之前，先预览将执行的固定命令：
-
-```bash
-intentcanvas facts prepare /path/to/project --dry-run
-```
-
-确认后生成当前代码事实：
-
-```bash
-intentcanvas facts prepare /path/to/project \
-  --output /tmp/current-facts.json
-```
-
-IntentCanvas 会优先复用现有的 `compile_commands.json`。如果文件不存在，v0.3 可以在 `~/.intentcanvas/evidence` 私有目录中配置 CMake 项目。安装 clang-uml 后，还会提取类和 Include 结构。
-
-工具始终通过固定参数数组启动，不拼接 Shell 命令；实际执行的命令、输出摘要和结果会记录到 `manifest.json`。
-
-### 校验并导入计划
-
-正常情况下由 Skill 自动完成，也可以手动执行：
-
-```bash
-intentcanvas plan validate ./plan.json
-intentcanvas plan import ./plan.json
-```
-
-Plan Model 是严格、带版本的结构化契约。审批状态由 Runtime 管理，聊天中的一句“可以”不会被偷偷当成正式批准。
-
-### 只调整有问题的模块
-
-如果意见只涉及一个模块：
-
-```bash
-intentcanvas plan revise <review-id> <module-id> ./module.json
-```
-
-只有这个模块会回到 `pending`，其他模块的批准继续有效。涉及顶层依赖关系、全局风险或系统级验证方式的修改，仍然需要更新整个 Plan。
-
-### 冻结批准方案
-
-v0.3 要求所有模块都通过批准才能开始实现：
-
-```bash
-intentcanvas plan gate <review-id>
-intentcanvas plan freeze <review-id> ./approved-snapshot.json
-```
-
-批准快照绑定到明确的 Runtime 版本和确定性摘要。只要计划再次变化，旧的验收结果就会自动失效。
-
-### 验收 Plan 与 Actual
-
-最可靠的方式是比较开发前后的真实 Code Facts：
-
-```bash
-intentcanvas acceptance facts <review-id> \
-  ./current-facts.json ./implemented-facts.json
-```
-
-如果还希望得到与 Plan 相同结构的可视化 Actual，也可以发布 Implemented Model：
-
-```bash
-intentcanvas plan validate ./implemented.json
-intentcanvas acceptance model <review-id> ./implemented.json
-```
-
-命令会打印一个以 `#acceptance` 结尾的新链接。HTML 页面显示总体结论和每个模块的验收卡片。退出码 `0` 表示结构契约匹配；退出码 `4` 表示内容未完成、发生计划外变化或仍需人工判断。
-
-## tmux、SSH 与终端点击
-
-如果 tmux、Runtime 和终端都在同一台机器上，直接点击终端输出的链接即可。
-
-如果 Claude/Codex 和 tmux 在远程 SSH 服务器上，需要在**本地电脑**启动 Bridge 并保持运行：
-
-```bash
-# 本地电脑
-intentcanvas bridge ssh user@build-host \
-  --review <review-id> \
-  --remote-port 4317
-```
-
-然后在远程 tmux 中生成一个新链接：
-
-```bash
-# 远程服务器 / tmux
-intentcanvas plan open <review-id>
-```
-
-点击远程终端里的链接时，iTerm 会打开本机 `127.0.0.1:4317`，Bridge 再将请求转发到远程 Runtime。Bridge 会校验参数，通过参数数组调用 `ssh`，并确保两端都只监听 Loopback。
-
-查看当前终端、tmux 和 SSH 环境：
-
-```bash
-intentcanvas bridge environment
-```
-
-## v0.3 已经具备的能力
-
-- 总体模块图，以及每个模块一行通俗说明
-- 单模块简化 UML 和聚焦后的关键调用路径
-- 类、函数、方法、字段、依赖和伪代码变化
-- 上一个/下一个模块导航，以及单模块重新规划
-- 模块审批、版本历史、执行门禁和 Approved Snapshot
-- C/C++ 文件、编译、符号、Include 和调用关系事实
-- Approved Plan 与 Implemented Model 对比
-- 开发前后 Code Facts 直接审计
-- HTML 验收结果和逐模块查看
-- Claude Code Hook 约束，以及 Claude/Codex 共享 Skill
-- Loopback Runtime、一次性浏览器会话、终端链接和 SSH Bridge
-- 一键 Setup、后台启停和环境诊断
-
-## 当前边界
-
-| 方向 | v0.3 当前能力 |
-| --- | --- |
-| 缺少 Compilation Database | 自动生成目前只支持 CMake |
-| 函数体证据 | 只有 clang-uml 声明时属于中等可信度，后续将增加 AST 函数体证据 |
-| 编译与测试证据 | 可以在 Plan 中列出命令，但还没有自动收集并放入最终验收 |
-| 大型项目图形 | Cytoscape.js 逐层展开、依赖矩阵和聚类尚未完成 |
-| 部分模块执行 | 当前必须批准整个 Plan，还不能自动推断安全的文件级局部执行范围 |
-| 远程桌面自动化 | 当前使用显式 SSH Bridge，Moshi 风格的本地守护和通知尚未完成 |
-| 审批隔离 | 本地令牌用于防止误操作，不能防御与用户使用同一系统账号的恶意 Agent |
-
-后续 AST 证据、自动质量检查、更丰富的大型项目图、复杂度视图和桌面 Host 见[路线图](docs/roadmap.md)。
-
-## 常见问题
-
-### UML 是 AI 猜出来的吗？
-
-不应该是。静态分析工具负责提供文件、符号、函数签名、Include、调用关系和来源；模型负责模块边界、设计判断、风险、伪代码和候选未来结构。证据不足会明确显示，不能被当成通过。
-
-### 大型功能真的显示得过来吗？
-
-依靠逐层展开，而不是生成一张包含几百个节点的 UML。先审查总体模块，再进入一个有限大小的模块，只展开与本次修改相关的调用路径。
-
-### 一个模块需要调整，必须全部重新生成吗？
-
-不需要。模块级意见只替换这个完整模块，其他模块和已有批准都会保留。
-
-### 网页会不会让我脱离 tmux 开发环境？
-
-不会。Claude 或 Codex 继续留在 tmux 中，网页只是审查界面。批准后回到原来的终端继续工作。
-
-### 批准是否真的能够限制 AI？
-
-Claude Code 对已经绑定 Review 的工作区使用同步、失败即阻断的 PreToolUse Hook。Codex 通过 Skill 按同样的门禁流程执行，但当前属于流程约束。两者都以 Runtime 状态作为唯一审批事实来源。
-
-## 仓库结构
+这条命令同时完成登录和网页转发：
 
 ```text
-apps/cli          终端工作流和可点击评审链接
-apps/runtime      本地评审状态、审批门禁、持久化和 API
-apps/studio       零依赖 HTML 图形化评审界面
-packages/protocol Plan、Code Facts、事件和快照协议
-packages/code-facts C/C++ 代码事实提取与准备
-packages/plan-diff Plan 与 Actual 对比
-packages/bridge   Loopback SSH/tmux 转发
-skills/visual-plan Claude Code 与 Codex 共享工作流
+本地 127.0.0.1:4317
+          ↓ SSH
+服务器 127.0.0.1:4317
 ```
 
-v0.3 将 Runtime 与 Studio 放在同一个仓库中，但模块边界允许后续独立拆分。更多信息见[架构说明](docs/architecture.md)、[Claude Code 集成](integrations/claude-code/README.md)和 [Codex 集成](integrations/codex/README.md)。
+本地电脑不需要安装 IntentCanvas，只需要保持 SSH 连接存在。
 
-## 开发与验证
+### 2. 在远程服务器进入 tmux
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm check
+cd /path/to/project
+tmux new-session -A -s project
+claude
 ```
 
-当前版本通过了 191 项自动化测试、架构边界检查、Claude Marketplace 严格校验和 Codex 插件校验。
+IntentCanvas 应当提前安装在这台远程服务器上。
 
-## 安全设计
+### 3. 在本地打开页面
 
-- Runtime 只监听 `127.0.0.1`，并校验 Loopback Host 和 Origin。
-- CLI 和 Hook 发送私有令牌前，必须通过新的 Challenge/HMAC 证明 Runtime 身份。
-- 浏览器 URL 只包含短时、一次性 Handoff，不包含长期令牌。
-- 浏览器会话只绑定一个 Review，不能导入或重写计划、发送 Agent 事件或生成新链接。
-- 持久化使用原子写入、单进程数据目录锁、有限版本历史，并对损坏状态失败关闭。
-- Bridge 两端都绑定 Loopback，并且从不构造 Shell 命令。
+Agent 生成计划后，远程 tmux 会显示：
 
-IntentCanvas 当前不能在密码学意义上隔离一个与用户使用相同 OS 账号的 Agent。未来需要独立桌面 Host 或用户在场签名，才能形成独立可信的人类审批边界。
+```text
+Review URL: http://127.0.0.1:4317/?review=...
+Open visual plan
+```
 
-## 开源协议
+在本地 iTerm2 中按住 `Command` 点击 `Open visual plan`。
 
-使用 [Apache License, Version 2.0](LICENSE)。
+浏览器访问的是本地 `127.0.0.1:4317`，SSH 会自动将请求转发到服务器上的 IntentCanvas。
+
+因此：
+
+- 不需要使用服务器公网 IP；
+- 不需要开放服务器的 4317 端口；
+- 不需要修改 `.tmux.conf`；
+- 不需要在本地安装 IntentCanvas。
+
+如果终端不能直接打开链接，复制完整 URL 到本地浏览器即可。
+
+### 4. 保存 SSH 配置
+
+可以在本地 `~/.ssh/config` 中加入：
+
+```sshconfig
+Host dev-server
+    HostName server.example.com
+    User your-name
+    LocalForward 4317 127.0.0.1:4317
+    ExitOnForwardFailure yes
+```
+
+以后只需要：
+
+```bash
+ssh dev-server
+```
+
+SSH 转发会自动建立。
+
+### SSH 断开后
+
+tmux 会话仍然保留，但 SSH 网页转发会停止。
+
+重新连接并恢复 tmux：
+
+```bash
+ssh dev-server
+tmux attach -t project
+```
+
+如果原来的链接已经过期，让 Agent 重新生成链接即可，不需要重新生成整个 Plan。
+
+## 如何使用
+
+### 1. 描述开发需求
+
+在 Claude Code 中运行：
+
+```text
+/intentcanvas:visual-plan
+```
+
+在 Codex 中运行：
+
+```text
+$visual-plan
+```
+
+然后正常描述需求：
+
+```text
+为当前项目增加透明数据加密功能。
+
+先生成可视化计划，展示总体模块关系、每个模块的简化 UML、
+关键函数入口、主要调用路径、成员变化和伪代码。
+
+在我批准全部模块之前不要修改代码。
+```
+
+### 2. 审核可视化计划
+
+Agent 分析完成后会输出评审链接。
+
+打开页面后：
+
+1. 查看总体设计和模块修改范围；
+2. 点击模块查看简化 UML；
+3. 检查函数入口、调用路径和伪代码；
+4. 批准正确的模块；
+5. 为有问题的模块填写修改意见。
+
+如果只退回一个模块，Agent 只重新生成这个模块，其他模块的批准状态会保留。
+
+### 3. 批准后开始开发
+
+全部模块批准后，返回终端：
+
+```text
+全部模块已经批准，请按照批准方案开始实现。
+```
+
+Claude Code 的审批 Hook 会在批准前阻止写入。Codex Skill 会在工作流中等待批准后再进入实现阶段。
+
+### 4. 验收实际实现
+
+开发完成后，IntentCanvas 重新提取代码事实并比较：
+
+```text
+Approved Plan
+      VS
+Implemented Code
+```
+
+验收页面会显示：
+
+- 计划内容是否完成；
+- 是否出现计划外模块或依赖；
+- 公共接口是否发生偏移；
+- 关键调用路径是否符合方案；
+- 哪些内容缺少证据，需要人工判断。
+
+如果实际开发需要改变已批准的核心设计，应重新进入评审，而不是直接修改批准记录。
+
+## 工作流程
+
+```mermaid
+flowchart LR
+    A["读取代码事实"] --> B["生成可视化 Plan"]
+    B --> C["用户逐模块审核"]
+    C --> D{"全部批准？"}
+    D -- "否" --> E["只调整被退回模块"]
+    E --> C
+    D -- "是" --> F["执行开发"]
+    F --> G["重新提取代码事实"]
+    G --> H["Plan / Actual 验收"]
+```
+
+## 当前方向
+
+IntentCanvas 当前重点支持：
+
+- 大型 C/C++ 项目；
+- 数据库和存储系统；
+- 分布式系统；
+- 跨模块功能；
+- 架构调整和结构性重构。
+
+后续将继续增加更丰富的代码事实、复杂度视图、依赖矩阵和大型项目图形导航能力，详见[路线图](docs/roadmap.md)。
+
+## License
+
+IntentCanvas 使用 [Apache License 2.0](LICENSE)。
